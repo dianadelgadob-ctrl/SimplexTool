@@ -1,0 +1,32 @@
+// ============================================
+// COPY-PASTE FIX FOR InteractiveSimplex.tsx
+// ============================================
+// 
+// Location: Line 228-232 in handleConstraintRowSubmit function
+// 
+// DELETE THESE 5 LINES:
+// ----------------------
+        // All constraints done, move to objective
+        setFeedback('✅ All constraints are set up! Now let\\'s set up the objective function row.');
+        setStep('setup-objective');
+        const objRow = new Array(totalVars + 1).fill(0);
+        setUserObjectiveRow(objRow);
+
+// REPLACE WITH THESE 11 LINES:
+// -----------------------------
+        // All constraints done, move to objective
+        const objRow = new Array(totalVars + 1).fill(0);
+        setUserObjectiveRow(objRow);
+        
+        if (needsPhase1) {
+          setFeedback('✅ All constraints are set up! Now set up the Phase 1 objective function.');
+          setStep('setup-phase1-objective');
+        } else {
+          setFeedback('✅ All constraints are set up! Now set up the objective function row.');
+          setStep('setup-objective');
+        }
+
+// ============================================
+// That's it! This is the ONLY manual fix needed.
+// Everything else has been successfully implemented.
+// ============================================
