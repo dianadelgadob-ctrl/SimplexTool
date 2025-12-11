@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Calculator, Sparkles, Zap } from "lucide-react";
+import { Calculator, Sparkles, Zap, BookOpen } from "lucide-react";
 import { SimplexInput } from "./components/SimplexInput";
 import { SimplexSolution } from "./components/SimplexSolution";
 import { InteractiveSimplex } from "./components/InteractiveSimplex";
 import { FeedbackDialog } from "./components/FeedbackDialog";
+import { UserManual } from "./components/UserManual";
 import {
   Tabs,
   TabsContent,
@@ -17,6 +18,15 @@ import {
 } from "./components/ui/radio-group";
 import { Label } from "./components/ui/label";
 import { Toaster } from "./components/ui/sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogDescription,
+} from "./components/ui/dialog";
+import { Button } from "./components/ui/button";
 
 export interface Constraint {
   coefficients: number[];
@@ -79,9 +89,11 @@ export default function App() {
   const [solveMode, setSolveMode] = useState<
     "auto" | "interactive"
   >("interactive");
+  const [savedProgressState, setSavedProgressState] = useState<any | null>(null);
 
   const handleSolve = (newProblem: SimplexProblem) => {
     setProblem(newProblem);
+    setSavedProgressState(null); // Clear any saved progress when solving a new problem
 
     if (solveMode === "auto") {
       const solution = solveSimplex(newProblem);
@@ -90,6 +102,12 @@ export default function App() {
     } else {
       setActiveTab("interactive");
     }
+  };
+
+  const handleLoadProgress = (newProblem: SimplexProblem, progressState: any) => {
+    setProblem(newProblem);
+    setSavedProgressState(progressState);
+    setActiveTab("interactive");
   };
 
   return (
@@ -191,14 +209,20 @@ export default function App() {
                 </RadioGroup>
               </div>
 
-              <SimplexInput onSolve={handleSolve} initialProblem={problem} />
+              <SimplexInput 
+                onSolve={handleSolve} 
+                onLoadProgress={handleLoadProgress}
+                initialProblem={problem} 
+              />
             </TabsContent>
 
             <TabsContent value="interactive" className="p-6">
               {problem && (
                 <InteractiveSimplex 
                   problem={problem} 
+                  savedProgress={savedProgressState}
                   onEditProblem={() => setActiveTab("input")}
+                  onProgressCleared={() => setSavedProgressState(null)}
                 />
               )}
             </TabsContent>
@@ -219,6 +243,28 @@ export default function App() {
             The Simplex method is an iterative algorithm for
             solving linear programming problems
           </p>
+          <p className="mt-1 text-xs">
+            Tool developed for learning purposes
+          </p>
+          <div className="mt-4">
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2">
+                  <BookOpen className="w-4 h-4" />
+                  Simplex Tool Manual
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>User Manual</DialogTitle>
+                  <DialogDescription>
+                    Learn how to use the Simplex Tool
+                  </DialogDescription>
+                </DialogHeader>
+                <UserManual />
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
       </div>
       <Toaster />

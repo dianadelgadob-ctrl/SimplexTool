@@ -1,20 +1,23 @@
-import { useState, useEffect } from 'react';
-import { Plus, Trash2, Play, TrendingUp, TrendingDown } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, Play, TrendingUp, TrendingDown, Library, Upload, Download } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from './ui/select';
 import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
+import { toast } from 'sonner@2.0.3';
 import type { SimplexProblem, Constraint } from '../App';
+import { PROBLEM_LIBRARY, CATEGORY_LABELS } from '../lib/problemLibrary';
 
 interface SimplexInputProps {
   onSolve: (problem: SimplexProblem) => void;
+  onLoadProgress?: (problem: SimplexProblem, progressState: any) => void;
   initialProblem?: SimplexProblem | null;
 }
 
-export function SimplexInput({ onSolve, initialProblem }: SimplexInputProps) {
+export function SimplexInput({ onSolve, onLoadProgress, initialProblem }: SimplexInputProps) {
   const [numVariables, setNumVariables] = useState(2);
   const [isMaximization, setIsMaximization] = useState(true);
   const [objectiveCoefficients, setObjectiveCoefficients] = useState<number[]>([3, 5]);
@@ -32,6 +35,12 @@ export function SimplexInput({ onSolve, initialProblem }: SimplexInputProps) {
     ['3', '2'],
   ]);
   const [rhsDisplayValues, setRhsDisplayValues] = useState<string[]>(['4', '12', '18']);
+  
+  // File input ref for loading from JSON
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // State to track when starting solve for green highlight
+  const [isStartingSolve, setIsStartingSolve] = useState(false);
 
   // Load initial problem if provided
   useEffect(() => {
@@ -200,10 +209,179 @@ export function SimplexInput({ onSolve, initialProblem }: SimplexInputProps) {
       numVariables
     };
     onSolve(problem);
+    setIsStartingSolve(true);
+    setTimeout(() => setIsStartingSolve(false), 1000); // Reset after 1 second
+  };
+
+  const loadProblem = (problem: SimplexProblem) => {
+    setNumVariables(problem.numVariables);
+    setIsMaximization(problem.isMaximization);
+    setObjectiveCoefficients(problem.objectiveCoefficients);
+    setObjDisplayValues(problem.objectiveCoefficients.map(String));
+    setConstraints(problem.constraints);
+    setConstraintDisplayValues(
+      problem.constraints.map(c => c.coefficients.map(String))
+    );
+    setRhsDisplayValues(problem.constraints.map(c => String(c.rhs)));
+  };
+
+  const handleLoadFromLibrary = (problemId: string) => {
+    if (problemId === '') return;
+    
+    const savedProblem = PROBLEM_LIBRARY.find(p => p.id === problemId);
+    if (savedProblem) {
+      loadProblem(savedProblem.problem);
+      toast.success(`Loaded: ${savedProblem.name}`, {
+        description: savedProblem.description,
+      });
+    }
+  };
+
+  const handleLoadFromFile = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const data = JSON.parse(content);
+        
+        // Validate the file format
+        if (!data.problem || !data.problem.objectiveCoefficients || !data.problem.constraints) {
+          toast.error('Invalid file format', {
+            description: 'The file does not contain a valid problem definition.',
+          });
+          return;
+        }
+
+        // Check if this is a saved progress file (contains state)
+        if (data.state && onLoadProgress) {
+          // This is a progress file with saved state
+          loadProblem(data.problem); // Load the problem into the input form
+          onLoadProgress(data.problem, data.state); // Pass progress to parent
+          toast.success('Progress loaded successfully', {
+            description: `Loaded saved progress from ${file.name}. The problem is loaded. Switch to Interactive Solve to continue.`,
+          });
+        } else {
+          // This is just a problem definition file
+          loadProblem(data.problem);
+          toast.success('Problem loaded successfully', {
+            description: `Loaded from ${file.name}`,
+          });
+        }
+      } catch (error) {
+        toast.error('Error loading file', {
+          description: 'The file could not be parsed. Please check the format.',
+        });
+      }
+    };
+
+    reader.readAsText(file);
+    
+    // Reset the input so the same file can be loaded again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleSaveProblem = () => {
+    const problem: SimplexProblem = {
+      objectiveCoefficients,
+      constraints,
+      isMaximization,
+      numVariables
+    };
+
+    const saveData = {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      problem,
+    };
+
+    const blob = new Blob([JSON.stringify(saveData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `simplex-problem-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success('Problem saved', {
+      description: 'Problem definition downloaded as JSON file',
+    });
   };
 
   return (
     <div className="space-y-6">
+      {/* Load Problem Section */}
+      <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Library className="w-5 h-5 text-indigo-600" />
+          <Label className="text-indigo-900">Load Example Problem</Label>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <Select onValueChange={handleLoadFromLibrary} value="">
+              <SelectTrigger className="w-full bg-white">
+                <SelectValue placeholder="Choose from library..." />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(CATEGORY_LABELS).map(([category, label]) => {
+                  const problems = PROBLEM_LIBRARY.filter(p => p.category === category);
+                  if (problems.length === 0) return null;
+                  
+                  return (
+                    <SelectGroup key={category}>
+                      <SelectLabel>{label}</SelectLabel>
+                      {problems.map(problem => (
+                        <SelectItem key={problem.id} value={problem.id}>
+                          <div className="flex flex-col">
+                            <span>{problem.name}</span>
+                            <span className="text-xs text-gray-500">{problem.description}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+          
+          <div>
+            <Button 
+              onClick={handleLoadFromFile} 
+              variant="outline" 
+              className="w-full bg-white hover:bg-indigo-50 border-indigo-300"
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              Load from JSON File
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+          </div>
+        </div>
+        
+        <p className="text-xs text-gray-600 mt-2">
+          Start with an example problem or load a previously saved problem from a JSON file
+        </p>
+      </div>
+
+      <Separator />
+
       <div className="space-y-4">
         <div>
           <Label htmlFor="numVariables">Number of Variables</Label>
@@ -386,10 +564,25 @@ export function SimplexInput({ onSolve, initialProblem }: SimplexInputProps) {
 
       <Separator />
 
-      <Button onClick={handleSolve} className="w-full" size="lg">
-        <Play className="w-4 h-4 mr-2" />
-        Solve with Simplex Method
-      </Button>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <Button 
+          onClick={handleSaveProblem} 
+          variant="outline" 
+          size="lg"
+          className="md:col-span-1"
+        >
+          <Download className="w-4 h-4 mr-2" />
+          Save Problem
+        </Button>
+        <Button 
+          onClick={handleSolve} 
+          className={`md:col-span-3 ${isMaximization ? 'highlight-next-step' : 'highlight-blue-step'}`} 
+          size="lg"
+        >
+          <Play className="w-4 h-4 mr-2" />
+          Solve with Simplex Method
+        </Button>
+      </div>
     </div>
   );
 }

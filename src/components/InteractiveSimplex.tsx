@@ -15,9 +15,9 @@ import {
   Layers,
   Calculator,
   Download,
-  Upload,
   Copy,
-  FileDown
+  FileDown,
+  Edit
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -38,16 +38,20 @@ import type { SimplexProblem } from '../App';
 
 interface InteractiveSimplexProps {
   problem: SimplexProblem;
+  savedProgress?: any | null;
   onEditProblem?: () => void;
+  onProgressCleared?: () => void;
 }
 
 type Step = 
   | 'setup-slack' 
-  | 'setup-artificial'
   | 'setup-constraints' 
+  | 'setup-objective'
+  | 'check-feasibility'
+  | 'setup-artificial'
+  | 'modify-constraints-artificial'
   | 'setup-phase1-objective'
-  | 'setup-phase2-objective'
-  | 'convert-to-canonical'
+  | 'eliminate-artificial-w-row'
   | 'select-entering' 
   | 'select-leaving'
   | 'calculate-ratios'
@@ -57,7 +61,11 @@ type Step =
   | 'check-phase1-feasibility'
   | 'complete';
 
-export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimplexProps) {
+export function InteractiveSimplex({ problem, savedProgress, onEditProblem, onProgressCleared }: InteractiveSimplexProps) {
+  // Local problem state that can be overridden when loading progress
+  const [currentProblem, setCurrentProblem] = useState<SimplexProblem>(problem);
+  const numVariables = currentProblem.numVariables;
+  
   const [tableau, setTableau] = useState<number[][]>([]);
   const [basicVariables, setBasicVariables] = useState<number[]>([]); 
   const [step, setStep] = useState<Step>('setup-slack');
@@ -69,13 +77,13 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
   const [showHint, setShowHint] = useState(false);
   const [showExplanation, setShowExplanation] = useState(false);
   const [showRatioExplanation, setShowRatioExplanation] = useState(false);
-  const [numVariables] = useState(problem.numVariables);
   
   // Setup phase state
   const [userSlackVars, setUserSlackVars] = useState<number>(0);
   const [userArtificialVars, setUserArtificialVars] = useState<number>(0);
   const [userConstraintRows, setUserConstraintRows] = useState<(number | string)[][]>([]);
   const [userObjectiveRow, setUserObjectiveRow] = useState<(number | string)[]>([]);
+  const [userPhase1FRow, setUserPhase1FRow] = useState<(number | string)[]>([]);
   const [currentConstraintIndex, setCurrentConstraintIndex] = useState(0);
   const [totalVars, setTotalVars] = useState(0);
   const [correctSlackVars, setCorrectSlackVars] = useState(0);
@@ -97,6 +105,8 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
   // Canonical form conversion state
   const [initialZRow, setInitialZRow] = useState<number[]>([]);
   const [userCanonicalZRow, setUserCanonicalZRow] = useState<(number | string)[]>([]);
+  const [initialWRow, setInitialWRow] = useState<number[]>([]);
+  const [userCanonicalWRow, setUserCanonicalWRow] = useState<(number | string)[]>([]);
   
   // Explanation visibility state
   const [showConstraintExplanation, setShowConstraintExplanation] = useState(false);
@@ -113,16 +123,95 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
   };
   const [tableauHistory, setTableauHistory] = useState<TableauSnapshot[]>([]);
 
+  // Track if we're in the middle of loading progress to prevent reset
+  const [isLoadingProgress, setIsLoadingProgress] = useState(false);
+
+  // Helper function to determine if next step button should be highlighted
+  const shouldHighlightNextButton = () => {
+    return feedbackType === 'success';
+  };
+
+  // Helper function to get the highlight class for buttons
+  const getHighlightClass = () => {
+    if (feedbackType === 'success') return 'highlight-next-step';
+    if (feedbackType === 'error') return 'highlight-error';
+    return '';
+  };
+
   // Initialize
   useEffect(() => {
-    resetToSetup();
-  }, [problem]);
+    // Only update currentProblem from prop if we're not loading progress
+    if (!isLoadingProgress) {
+      setCurrentProblem(problem);
+    }
+  }, [problem, isLoadingProgress]);
+
+  useEffect(() => {
+    // Don't reset if we're loading progress
+    if (!isLoadingProgress) {
+      resetToSetup();
+    }
+  }, [currentProblem, isLoadingProgress]);
+
+  // Load saved progress if provided from Problem Setup
+  useEffect(() => {
+    if (savedProgress) {
+      setIsLoadingProgress(true);
+      
+      // Restore problem definition
+      setCurrentProblem(problem);
+
+      // Restore state
+      setTableau(savedProgress.tableau);
+      setBasicVariables(savedProgress.basicVariables);
+      setStep(savedProgress.step);
+      setIteration(savedProgress.iteration);
+      setSelectedEntering(savedProgress.selectedEntering);
+      setSelectedLeaving(savedProgress.selectedLeaving);
+      setUserSlackVars(savedProgress.userSlackVars);
+      setUserArtificialVars(savedProgress.userArtificialVars);
+      setUserConstraintRows(savedProgress.userConstraintRows);
+      setUserObjectiveRow(savedProgress.userObjectiveRow);
+      setCurrentConstraintIndex(savedProgress.currentConstraintIndex);
+      setTotalVars(savedProgress.totalVars);
+      setCorrectSlackVars(savedProgress.correctSlackVars);
+      setCorrectArtificialVars(savedProgress.correctArtificialVars);
+      setNeedsPhase1(savedProgress.needsPhase1);
+      setCurrentPhase(savedProgress.currentPhase);
+      setPhase1Iterations(savedProgress.phase1Iterations);
+      setAskedPhase1Question(savedProgress.askedPhase1Question);
+      setUserRatios(savedProgress.userRatios);
+      setUserBValues(savedProgress.userBValues);
+      setUserEnteringValues(savedProgress.userEnteringValues);
+      setUserPivotDivisor(savedProgress.userPivotDivisor);
+      setUserRowMultipliers(savedProgress.userRowMultipliers);
+      setCurrentRowIndex(savedProgress.currentRowIndex);
+      setInitialZRow(savedProgress.initialZRow);
+      setUserCanonicalZRow(savedProgress.userCanonicalZRow);
+      setTableauHistory(savedProgress.tableauHistory);
+
+      // Set appropriate feedback
+      setFeedbackType('success');
+      setFeedback('Progress loaded successfully! Continue from where you left off.');
+      
+      // Clear the loading flag and notify parent
+      setTimeout(() => {
+        setIsLoadingProgress(false);
+        if (onProgressCleared) {
+          onProgressCleared();
+        }
+      }, 0);
+      
+      toast.success('Saved progress restored!');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedProgress]);
 
   const resetToSetup = () => {
     // Calculate correct number of slack/surplus and artificial variables
     let numSlack = 0;
     let numArtificial = 0;
-    problem.constraints.forEach(constraint => {
+    currentProblem.constraints.forEach(constraint => {
       if (constraint.operator === '<=') {
         numSlack++;
       } else if (constraint.operator === '>=') {
@@ -171,7 +260,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       const firstRow = new Array(numVariables + userSlackVars + 1).fill('');
       setUserConstraintRows([firstRow]);
     } else {
-      setFeedback(`❌ Not quite. We have ${problem.constraints.filter(c => c.operator === '<=' || c.operator === '>=').length} inequality constraint(s). Each needs a slack or surplus variable.`);
+      setFeedback(`❌ Not quite. We have ${currentProblem.constraints.filter(c => c.operator === '<=' || c.operator === '>=').length} inequality constraint(s). Each needs a slack or surplus variable.`);
       setFeedbackType('error');
     }
   };
@@ -185,11 +274,25 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         setFeedbackType('success');
         setAskedPhase1Question(true);
         setShowHint(false);
+        // Move to counting artificial variables
+        setStep('setup-artificial');
       } else {
         setFeedback('✅ Correct! The initial basic solution IS feasible. All slack variables are non-negative. We can proceed directly with the Simplex Method.');
         setFeedbackType('success');
         setShowHint(false);
-        // Proceed to solving
+        // Proceed to solving - remove the (-f) column from tableau
+        const newTableau = tableau.map(row => {
+          // Remove the (-f) column (second to last column)
+          return [...row.slice(0, -2), row[row.length - 1]];
+        });
+        setTableau(newTableau);
+        setTableauHistory([{
+          tableau: newTableau,
+          basicVariables: basicVariables,
+          iteration: 0,
+          phase: 2
+        }]);
+        setCurrentPhase(2);
         setStep('select-entering');
       }
     } else {
@@ -205,56 +308,107 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
 
   const handleArtificialVarsSubmit = () => {
     if (userArtificialVars === correctArtificialVars) {
-      setFeedback(`✅ Correct! We need ${correctArtificialVars} artificial variable(s). Now we need to rebuild the tableau with artificial variables and set up Phase 1.`);
+      setFeedback(`✅ Correct! We need ${correctArtificialVars} artificial variable(s). Now let's add them to the constraint rows.`);
       setFeedbackType('success');
       setTotalVars(numVariables + userSlackVars + userArtificialVars);
       setShowHint(false);
       
-      // Rebuild constraint rows with artificial variables
-      const newConstraintRows: (number | string)[][] = [];
-      let slackIdx = numVariables;
-      let artificialIdx = numVariables + userSlackVars;
-      
-      problem.constraints.forEach(constraint => {
-        const row = new Array(numVariables + userSlackVars + userArtificialVars + 1).fill('');
-        
-        // Copy decision variable coefficients from existing rows
-        constraint.coefficients.forEach((coeff, i) => {
-          row[i] = coeff;
-        });
-        
-        // Add slack/surplus
-        if (constraint.operator === '<=' || constraint.operator === '>=') {
-          row[slackIdx] = constraint.operator === '<=' ? 1 : -1;
-          slackIdx++;
+      // Expand constraint rows to include artificial variable columns (initially empty)
+      const newConstraintRows: (number | string)[][] = userConstraintRows.map(row => {
+        const newRow = new Array(numVariables + userSlackVars + userArtificialVars + 1).fill('');
+        // Copy existing values (decision vars + slack/surplus + rhs)
+        for (let i = 0; i < numVariables + userSlackVars; i++) {
+          newRow[i] = row[i];
         }
-        
-        // Add artificial
-        if (constraint.operator === '>=' || constraint.operator === '=') {
-          row[artificialIdx] = 1;
-          artificialIdx++;
-        }
-        
         // RHS
-        row[row.length - 1] = constraint.rhs;
-        newConstraintRows.push(row);
+        newRow[newRow.length - 1] = row[row.length - 1];
+        return newRow;
       });
       
       setUserConstraintRows(newConstraintRows);
-      
-      // Now set up Phase 1 objective
-      setStep('setup-phase1-objective');
-      const objRow = new Array(numVariables + userSlackVars + userArtificialVars + 1).fill('');
-      setUserObjectiveRow(objRow);
-      setFeedback('Constraint rows updated with artificial variables. Now set up the Phase 1 objective function (minimize w = sum of artificial variables).');
+      setCurrentConstraintIndex(0);
+      setStep('modify-constraints-artificial');
     } else {
       setFeedback(`❌ Not quite. Count constraints with ≥ (need artificial + surplus) and = (need artificial only). Total: ${correctArtificialVars}.`);
       setFeedbackType('error');
     }
   };
 
+  const handleModifiedConstraintRowSubmit = () => {
+    const constraint = currentProblem.constraints[currentConstraintIndex];
+    const currentRow = userConstraintRows[currentConstraintIndex];
+    const rhsCol = currentRow.length - 1;
+    
+    // Build correct row with artificial variables
+    const correctRow = new Array(numVariables + userSlackVars + userArtificialVars + 1).fill(0);
+    constraint.coefficients.forEach((coeff, i) => {
+      correctRow[i] = coeff;
+    });
+    
+    // Add slack/surplus variables
+    let slackIdx = numVariables;
+    for (let i = 0; i < currentConstraintIndex; i++) {
+      if (currentProblem.constraints[i].operator === '<=' || currentProblem.constraints[i].operator === '>=') {
+        slackIdx++;
+      }
+    }
+    
+    if (constraint.operator === '<=') {
+      correctRow[slackIdx] = 1;
+    } else if (constraint.operator === '>=') {
+      correctRow[slackIdx] = -1;  // Surplus variable
+    }
+    
+    // Add artificial variables
+    let artificialIdx = numVariables + userSlackVars;
+    for (let i = 0; i < currentConstraintIndex; i++) {
+      if (currentProblem.constraints[i].operator === '>=' || currentProblem.constraints[i].operator === '=') {
+        artificialIdx++;
+      }
+    }
+    
+    if (constraint.operator === '>=' || constraint.operator === '=') {
+      correctRow[artificialIdx] = 1;  // Artificial variable
+    }
+    
+    correctRow[rhsCol] = constraint.rhs;
+    
+    // Check if user's row matches
+    let isCorrect = true;
+    for (let i = 0; i < correctRow.length; i++) {
+      const userValue = typeof currentRow[i] === 'string' 
+        ? (currentRow[i] === '' ? 0 : parseFloat(currentRow[i])) 
+        : currentRow[i];
+      const numericValue = isNaN(userValue) ? 0 : userValue;
+      if (!numbersMatch(numericValue, correctRow[i])) {
+        isCorrect = false;
+        break;
+      }
+    }
+    
+    if (isCorrect) {
+      setFeedback('✅ Perfect! This constraint row is correct with artificial variables added.');
+      setFeedbackType('success');
+      
+      if (currentConstraintIndex < currentProblem.constraints.length - 1) {
+        // Move to next constraint
+        setCurrentConstraintIndex(currentConstraintIndex + 1);
+        setFeedback(`✅ Great! Now let's modify constraint ${currentConstraintIndex + 2} of ${currentProblem.constraints.length}.`);
+      } else {
+        // All constraints done, move to Phase 1 objective
+        setFeedback("✅ All constraints updated with artificial variables! Now let's set up the Phase 1 objective function.");
+        setStep('setup-phase1-objective');
+        const objRow = new Array(numVariables + userSlackVars + userArtificialVars).fill('');
+        setUserObjectiveRow(objRow);
+      }
+    } else {
+      setFeedback('❌ This row is not quite right. Check the artificial variable placement. Which constraints need artificial variables?');
+      setFeedbackType('error');
+    }
+  };
+
   const handleConstraintRowSubmit = () => {
-    const constraint = problem.constraints[currentConstraintIndex];
+    const constraint = currentProblem.constraints[currentConstraintIndex];
     const currentRow = userConstraintRows[currentConstraintIndex];
     const rhsCol = currentRow.length - 1;
     
@@ -268,7 +422,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     let slackIdx = numVariables;
     
     for (let i = 0; i < currentConstraintIndex; i++) {
-      if (problem.constraints[i].operator === '<=' || problem.constraints[i].operator === '>=') {
+      if (currentProblem.constraints[i].operator === '<=' || currentProblem.constraints[i].operator === '>=') {
         slackIdx++;
       }
     }
@@ -292,7 +446,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         ? (currentRow[i] === '' ? 0 : parseFloat(currentRow[i])) 
         : currentRow[i];
       const numericValue = isNaN(userValue) ? 0 : userValue;
-      if (Math.abs(numericValue - correctRow[i]) > 1e-6) {
+      if (!numbersMatch(numericValue, correctRow[i])) {
         isCorrect = false;
         break;
       }
@@ -302,17 +456,17 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       setFeedback('✅ Perfect! This constraint row is correct.');
       setFeedbackType('success');
       
-      if (currentConstraintIndex < problem.constraints.length - 1) {
+      if (currentConstraintIndex < currentProblem.constraints.length - 1) {
         // Move to next constraint
         setCurrentConstraintIndex(currentConstraintIndex + 1);
         const nextRow = new Array(totalVars + 1).fill('');
         setUserConstraintRows([...userConstraintRows, nextRow]);
-        setFeedback(`✅ Great! Now let's set up constraint ${currentConstraintIndex + 2} of ${problem.constraints.length}.`);
+        setFeedback(`✅ Great! Now let's set up constraint ${currentConstraintIndex + 2} of ${currentProblem.constraints.length}.`);
       } else {
         // All constraints done, move to objective (always Phase 2 objective initially)
         setFeedback('✅ All constraints are set up! Now let\'s set up the objective function row.');
-        setStep('setup-phase2-objective');
-        const objRow = new Array(totalVars + 1).fill('');
+        setStep('setup-objective');
+        const objRow = new Array(totalVars).fill('');
         setUserObjectiveRow(objRow);
       }
     } else {
@@ -322,7 +476,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
   };
 
   const handleObjectiveRowSubmit = () => {
-    if (needsPhase1 && currentPhase === 1) {
+    if (step === 'setup-phase1-objective') {
       handlePhase1ObjectiveRowSubmit();
     } else {
       handlePhase2ObjectiveRowSubmit();
@@ -331,13 +485,13 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
 
   const handlePhase1ObjectiveRowSubmit = () => {
     // Phase 1 objective: Minimize w = sum of artificial variables
-    const correctRow = new Array(totalVars + 1).fill(0);
+    const correctRow = new Array(totalVars).fill(0);
     
     // Artificial variables have coefficient of 1
     for (let i = 0; i < userArtificialVars; i++) {
       correctRow[numVariables + userSlackVars + i] = 1;
     }
-    correctRow[totalVars] = 0;
+    // No b column in setup-phase1-objective step
     
     let isCorrect = true;
     for (let i = 0; i < correctRow.length; i++) {
@@ -345,22 +499,46 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         ? (userObjectiveRow[i] === '' ? 0 : parseFloat(userObjectiveRow[i])) 
         : userObjectiveRow[i];
       const numericValue = isNaN(userValue) ? 0 : userValue;
-      if (Math.abs(numericValue - correctRow[i]) > 1e-6) {
+      if (!numbersMatch(numericValue, correctRow[i])) {
         isCorrect = false;
         break;
       }
     }
     
     if (isCorrect) {
-      setFeedback('✅ Good! Now setting up the Phase 1 tableau with (-f) and (-w) rows. After setup, we\'ll check if the initial basic solution is feasible (w = 0)...');
+      setFeedback('✅ Good! The input (-w) row is correct. Now building the Phase 1 tableau...');
       setFeedbackType('success');
+      
+      // Automatically build the (-f) row by expanding the previously entered objective row
+      // The (-f) row is the same as the initial objective row, with zeros for artificial variables
+      const expandedFRow: (number | string)[] = [];
+      
+      // Get the objective row that was entered during setup-objective (before we knew Phase 1 was needed)
+      const originalObjRow = tableau[tableau.length - 1]; // Last row of the initial tableau
+      
+      // Copy decision variables and slack/surplus variables from the original objective row
+      for (let i = 0; i < numVariables + userSlackVars; i++) {
+        expandedFRow.push(originalObjRow[i]);
+      }
+      
+      // Add zeros for artificial variables
+      for (let i = 0; i < userArtificialVars; i++) {
+        expandedFRow.push(0);
+      }
+      
+      // Add RHS (0)
+      expandedFRow.push(0);
+      
+      setUserPhase1FRow(expandedFRow);
       
       // Set up basic variables
       const basicVars: number[] = [];
       let slackIdx = numVariables;
       let artificialIdx = numVariables + userSlackVars;
       
-      problem.constraints.forEach(constraint => {
+      // Use userConstraintRows.length instead of currentProblem.constraints to ensure they match
+      for (let i = 0; i < userConstraintRows.length && i < currentProblem.constraints.length; i++) {
+        const constraint = currentProblem.constraints[i];
         if (constraint.operator === '<=') {
           basicVars.push(slackIdx);
           slackIdx++;
@@ -372,7 +550,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
           basicVars.push(artificialIdx);
           artificialIdx++;
         }
-      });
+      }
       setBasicVariables(basicVars);
       
       // Build tableau with constraint rows, (-f) row, and (-w) row
@@ -391,20 +569,157 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         completeTableau.push(newRow);
       });
       
-      // (-f) row: Original objective function (same setup as Phase 2 Z row)
-      const objCoeffs = problem.isMaximization 
-        ? problem.objectiveCoefficients 
-        : problem.objectiveCoefficients.map(c => -c);
-      
-      const fRow = new Array(totalVars + 2).fill(0);
-      objCoeffs.forEach((coeff, i) => {
-        fRow[i] = -coeff;
+      // (-f) row: Use the expanded F row (convert strings/empty to numbers)
+      const numericFRow = expandedFRow.map(v => {
+        if (typeof v === 'string') {
+          return v === '' ? 0 : parseFloat(v) || 0;
+        }
+        return v;
       });
-      // Slack variables have 0 coefficient (already filled)
-      // Artificial variables have 0 coefficient (already filled)
-      fRow[totalVars] = 0; // (-w) column has 0 in (-f) row
-      fRow[totalVars + 1] = 0; // b value is 0
+      const fRow = [...numericFRow.slice(0, -1), 0, numericFRow[numericFRow.length - 1]]; // Insert 0 for (-w) column before b
+      
+      // Eliminate basic variables from (-f) row to achieve canonical form
+      const fRowIdx = completeTableau.length;
       completeTableau.push(fRow);
+      
+      for (let i = 0; i < basicVars.length; i++) {
+        const basicVarIdx = basicVars[i];
+        const coefficient = completeTableau[fRowIdx][basicVarIdx];
+        if (Math.abs(coefficient) > 1e-10) {
+          for (let j = 0; j <= totalVars + 1; j++) {
+            completeTableau[fRowIdx][j] -= coefficient * completeTableau[i][j];
+          }
+        }
+      }
+      
+      // (-w) row: Phase 1 objective with artificial variables (convert strings/empty to numbers)
+      // DO NOT ELIMINATE - just show the input row with 1s in artificial variable columns
+      const numericObjRow = userObjectiveRow.map(v => {
+        if (typeof v === 'string') {
+          return v === '' ? 0 : parseFloat(v) || 0;
+        }
+        return v;
+      });
+      const wRow = [...numericObjRow, 1, 0]; // Add (-w) column (1) and b column (0)
+      
+      // Store the initial W row for the user to eliminate
+      setInitialWRow(wRow);
+      
+      // Add the initial (-w) row to tableau WITHOUT elimination
+      completeTableau.push(wRow);
+      
+      setTableau(completeTableau);
+      setTableauHistory([{
+        tableau: completeTableau,
+        basicVariables: basicVars,
+        iteration: 0,
+        phase: 1,
+        numSlackVars: userSlackVars,
+        numArtificialVars: userArtificialVars
+      }]);
+      
+      // Now ask the user to eliminate the artificial variables from the (-w) row
+      setShowHint(false);
+      setStep('eliminate-artificial-w-row');
+      setFeedback('✅ Tableau built! Now you need to eliminate the artificial variables from the (-w) row to achieve canonical form.');
+      const canonicalWRow = new Array(totalVars + 2).fill(''); // +2 for (-w) column and b column
+      setUserCanonicalWRow(canonicalWRow);
+    } else {
+      setFeedback('❌ Not correct. Set coefficient of 1 for each artificial variable, 0 for all others.');
+      setFeedbackType('error');
+    }
+  };
+
+  const handlePhase1FRowSubmit = () => {
+    // (-f) row: Original objective function (same setup as Phase 2 Z row)
+    const objCoeffs = currentProblem.isMaximization 
+      ? currentProblem.objectiveCoefficients 
+      : currentProblem.objectiveCoefficients.map(c => -c);
+    
+    const correctRow = new Array(totalVars + 1).fill(0);
+    objCoeffs.forEach((coeff, i) => {
+      correctRow[i] = -coeff;
+    });
+    // Slack variables have 0 coefficient (already filled)
+    // Artificial variables have 0 coefficient (already filled)
+    correctRow[totalVars] = 0; // b value is 0
+    
+    let isCorrect = true;
+    for (let i = 0; i < correctRow.length; i++) {
+      const userValue = typeof userPhase1FRow[i] === 'string' 
+        ? (userPhase1FRow[i] === '' ? 0 : parseFloat(userPhase1FRow[i])) 
+        : userPhase1FRow[i];
+      const numericValue = isNaN(userValue) ? 0 : userValue;
+      if (!numbersMatch(numericValue, correctRow[i])) {
+        isCorrect = false;
+        break;
+      }
+    }
+    
+    if (isCorrect) {
+      setFeedback('✅ Excellent! The (-f) row is correct. Now building the Phase 1 tableau...');
+      setFeedbackType('success');
+      
+      // Set up basic variables
+      const basicVars: number[] = [];
+      let slackIdx = numVariables;
+      let artificialIdx = numVariables + userSlackVars;
+      
+      // Use userConstraintRows.length instead of currentProblem.constraints to ensure they match
+      for (let i = 0; i < userConstraintRows.length && i < currentProblem.constraints.length; i++) {
+        const constraint = currentProblem.constraints[i];
+        if (constraint.operator === '<=') {
+          basicVars.push(slackIdx);
+          slackIdx++;
+        } else if (constraint.operator === '>=') {
+          basicVars.push(artificialIdx);
+          slackIdx++;
+          artificialIdx++;
+        } else {
+          basicVars.push(artificialIdx);
+          artificialIdx++;
+        }
+      }
+      setBasicVariables(basicVars);
+      
+      // Build tableau with constraint rows, (-f) row, and (-w) row
+      // Each row now has: decision vars, slack vars, artificial vars, (-w) column, b column
+      const completeTableau: number[][] = [];
+      
+      // Add constraint rows with (-w) column inserted before b (convert strings/empty to numbers)
+      userConstraintRows.forEach(row => {
+        const numericRow = row.map(v => {
+          if (typeof v === 'string') {
+            return v === '' ? 0 : parseFloat(v) || 0;
+          }
+          return v;
+        });
+        const newRow = [...numericRow.slice(0, -1), 0, numericRow[numericRow.length - 1]]; // Insert 0 for (-w) column before b
+        completeTableau.push(newRow);
+      });
+      
+      // (-f) row: Use the user's input (convert strings/empty to numbers)
+      const numericFRow = userPhase1FRow.map(v => {
+        if (typeof v === 'string') {
+          return v === '' ? 0 : parseFloat(v) || 0;
+        }
+        return v;
+      });
+      const fRow = [...numericFRow.slice(0, -1), 0, numericFRow[numericFRow.length - 1]]; // Insert 0 for (-w) column before b
+      
+      // Eliminate basic variables from (-f) row to achieve canonical form
+      const fRowIdx = completeTableau.length;
+      completeTableau.push(fRow);
+      
+      for (let i = 0; i < basicVars.length; i++) {
+        const basicVarIdx = basicVars[i];
+        const coefficient = completeTableau[fRowIdx][basicVarIdx];
+        if (Math.abs(coefficient) > 1e-10) {
+          for (let j = 0; j <= totalVars + 1; j++) {
+            completeTableau[fRowIdx][j] -= coefficient * completeTableau[i][j];
+          }
+        }
+      }
       
       // (-w) row: Phase 1 objective with artificial variables (convert strings/empty to numbers)
       const numericObjRow = userObjectiveRow.map(v => {
@@ -415,23 +730,11 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       });
       const wRow = [...numericObjRow.slice(0, -1), 1, numericObjRow[numericObjRow.length - 1]]; // Insert 1 for (-w) column before b
       
-      // Eliminate basic variables from (-f) row to achieve canonical form
-      const fRowIdx = completeTableau.length - 1; // (-f) row was just added
-      for (let i = 0; i < problem.constraints.length; i++) {
-        const basicVarIdx = basicVars[i];
-        const coefficient = completeTableau[fRowIdx][basicVarIdx];
-        if (Math.abs(coefficient) > 1e-10) {
-          for (let j = 0; j <= totalVars + 1; j++) {
-            completeTableau[fRowIdx][j] -= coefficient * completeTableau[i][j];
-          }
-        }
-      }
-      
       // Eliminate artificial variables from (-w) row to achieve canonical form
       const wRowIdx = completeTableau.length;
       completeTableau.push(wRow);
       
-      for (let i = 0; i < problem.constraints.length; i++) {
+      for (let i = 0; i < basicVars.length; i++) {
         if (basicVars[i] >= numVariables + userSlackVars) {
           for (let j = 0; j <= totalVars + 1; j++) {
             completeTableau[wRowIdx][j] -= completeTableau[i][j];
@@ -467,7 +770,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         setIteration(0);
         
         // Remove artificial variables and (-w) column from tableau
-        const numConstraints = problem.constraints.length;
+        const numConstraints = basicVars.length; // Use basicVars length since it matches actual constraint rows
         const newTableau: number[][] = [];
         
         // Keep only constraint rows (remove (-f) and (-w) rows)
@@ -492,7 +795,11 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         const newBasicVars = basicVars.map((bv, i) => {
           if (bv >= numVariables + userSlackVars) {
             // This is an artificial variable, need to find the surplus variable for this row
-            const constraint = problem.constraints[i];
+            const constraint = currentProblem.constraints[i];
+            if (!constraint) {
+              // Safety check: if constraint doesn't exist, keep the basic variable as is
+              return bv;
+            }
             if (constraint.operator === '>=') {
               // Find the surplus variable index for this constraint
               let slackCount = 0;
@@ -523,12 +830,50 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         
         setBasicVariables(newBasicVars);
         setTotalVars(numVariables + userSlackVars);
-        setTableau(newTableau);
         
-        // Go to Phase 2 objective setup
-        setStep('setup-phase2-objective');
-        const objRow2 = new Array(numVariables + userSlackVars + 1).fill('');
-        setUserObjectiveRow(objRow2);
+        // Automatically set up Phase 2 objective row
+        const objCoeffs2 = currentProblem.isMaximization 
+          ? currentProblem.objectiveCoefficients 
+          : currentProblem.objectiveCoefficients.map(c => -c);
+        
+        const phase2ObjRow = new Array(numVariables + userSlackVars + 1).fill(0);
+        objCoeffs2.forEach((coeff, i) => {
+          phase2ObjRow[i] = -coeff;
+        });
+        
+        // Add Phase 2 objective row to tableau
+        const tableauWithPhase2Obj = [...newTableau, phase2ObjRow];
+        
+        setCurrentPhase(2);
+        setPhase1Iterations(0); // No iterations were needed
+        setIteration(0); // Reset iteration counter for Phase 2
+        
+        // Automatically convert to canonical form by eliminating basic variables
+        const canonicalZRow = [...phase2ObjRow];
+        for (let i = 0; i < currentProblem.constraints.length && i < basicVariables.length && i < tableauWithPhase2Obj.length - 1; i++) {
+          const basicVar = basicVariables[i];
+          if (basicVar !== undefined && basicVar !== null && !isNaN(basicVar) && basicVar < numVariables + userSlackVars && Math.abs(canonicalZRow[basicVar]) > 1e-10) {
+            const factor = canonicalZRow[basicVar];
+            for (let j = 0; j <= numVariables + userSlackVars; j++) {
+              canonicalZRow[j] -= factor * tableauWithPhase2Obj[i][j];
+            }
+          }
+        }
+        
+        // Update tableau with canonical Z row
+        const completeTableau = [...tableauWithPhase2Obj.slice(0, -1), canonicalZRow];
+        setTableau(completeTableau);
+        setTableauHistory([{
+          tableau: completeTableau,
+          basicVariables: basicVariables,
+          iteration: 0,
+          phase: 2
+        }]);
+        
+        setStep('select-entering');
+        setFeedback('🎉 w = 0! The basic solution is already feasible. Phase 2 objective row has been set up in canonical form. Ready to begin the Simplex Method!');
+        setFeedbackType('success');
+        setShowHint(false);
       } else {
         // w > 0, so we need to perform Phase 1 to minimize w
         setStep('select-entering');
@@ -536,21 +881,21 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         setFeedback(`✅ Phase 1 tableau ready! The initial solution has w = ${wValue.toFixed(4)} (sum of artificial variables). Since w > 0, the initial solution is not feasible for the original problem. We need to minimize w to find a feasible solution. Find the entering variable.`);
       }
     } else {
-      setFeedback('❌ Not correct. Set coefficient of 1 for each artificial variable, 0 for all others.');
+      setFeedback('❌ Not correct. The (-f) row should have the negated coefficients of the original objective function for decision variables, and 0 for slack and artificial variables.');
       setFeedbackType('error');
     }
   };
 
   const handlePhase2ObjectiveRowSubmit = () => {
-    const objCoeffs = problem.isMaximization 
-      ? problem.objectiveCoefficients 
-      : problem.objectiveCoefficients.map(c => -c);
+    const objCoeffs = currentProblem.isMaximization 
+      ? currentProblem.objectiveCoefficients 
+      : currentProblem.objectiveCoefficients.map(c => -c);
     
-    const correctRow = new Array(totalVars + 1).fill(0);
+    const correctRow = new Array(totalVars).fill(0);
     objCoeffs.forEach((coeff, i) => {
       correctRow[i] = -coeff;
     });
-    correctRow[totalVars] = 0;
+    // No b column in setup-objective step
     
     let isCorrect = true;
     for (let i = 0; i < correctRow.length; i++) {
@@ -558,7 +903,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         ? (userObjectiveRow[i] === '' ? 0 : parseFloat(userObjectiveRow[i])) 
         : userObjectiveRow[i];
       const numericValue = isNaN(userValue) ? 0 : userValue;
-      if (Math.abs(numericValue - correctRow[i]) > 1e-6) {
+      if (!numbersMatch(numericValue, correctRow[i])) {
         isCorrect = false;
         break;
       }
@@ -569,41 +914,47 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       setFeedbackType('success');
       
       // Build the tableau and check if the basic solution is feasible
-      const numericConstraintRows = userConstraintRows.map(row => 
-        row.map(v => {
+      // Insert a (-f) column before the b column (0 for constraints, 1 for objective row)
+      const numericConstraintRows = userConstraintRows.map(row => {
+        const numericRow = row.map(v => {
           if (typeof v === 'string') {
             return v === '' ? 0 : parseFloat(v) || 0;
           }
           return v;
-        })
-      );
+        });
+        // Insert 0 for (-f) column before b
+        return [...numericRow.slice(0, -1), 0, numericRow[numericRow.length - 1]];
+      });
       const numericObjectiveRow = userObjectiveRow.map(v => {
         if (typeof v === 'string') {
           return v === '' ? 0 : parseFloat(v) || 0;
         }
         return v;
       });
-      const completeTableau = [...numericConstraintRows, numericObjectiveRow];
+      // Add (-f) column (1) and b column (0) to objective row
+      const objectiveRowWithFColumn = [...numericObjectiveRow, 1, 0];
+      const completeTableau = [...numericConstraintRows, objectiveRowWithFColumn];
       setTableau(completeTableau);
       
       // Determine basic variables based on slack/surplus variables
       const basicVars: number[] = [];
       let slackIdx = numVariables;
-      problem.constraints.forEach(constraint => {
+      // Use numericConstraintRows.length instead of currentProblem.constraints to ensure they match
+      for (let i = 0; i < numericConstraintRows.length; i++) {
+        const constraint = currentProblem.constraints[i];
         if (constraint.operator === '<=') {
           basicVars.push(slackIdx);
           slackIdx++;
         } else if (constraint.operator === '>=') {
-          // For >= constraints, surplus variable would be negative in initial solution
-          // Can't use it as basic variable yet
-          basicVars.push(-1); // Placeholder - indicates we need artificial variable
+          // For >= constraints, show surplus variable in basis (even though it would be negative)
+          basicVars.push(slackIdx);
           slackIdx++;
         } else {
           // For = constraints, no slack variable exists
           // Can't have basic variable yet
           basicVars.push(-1); // Placeholder - indicates we need artificial variable
         }
-      });
+      }
       setBasicVariables(basicVars);
       setTableauHistory([{
         tableau: completeTableau,
@@ -613,7 +964,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       }]);
       
       // Now ask if the basic solution is feasible
-      setStep('setup-artificial');
+      setStep('check-feasibility');
       setFeedback('Tableau is set up! Now let\'s check if the initial basic solution is feasible.');
       setShowHint(false);
     } else {
@@ -686,13 +1037,34 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     setUserCanonicalZRow(newRow);
   };
 
+  const updatePhase1FCell = (colIdx: number, value: string) => {
+    const newRow = JSON.parse(JSON.stringify(userPhase1FRow));
+    
+    if (value === '') {
+      newRow[colIdx] = '';
+    } else {
+      const parsed = parseFloat(value);
+      // Allow intermediate typing states like "-", ".", "-.", "-1.", etc.
+      if (!isNaN(parsed)) {
+        newRow[colIdx] = parsed;
+      } else if (value === '-' || value === '.' || value === '-.' || value.match(/^-?\d*\.$/)) {
+        // Keep the incomplete input as a string for display
+        newRow[colIdx] = value;
+      } else {
+        // Invalid input, keep current value
+        return;
+      }
+    }
+    setUserPhase1FRow(newRow);
+  };
+
   const handleCanonicalFormSubmit = () => {
     // Calculate the correct canonical form
     const correctCanonical = [...initialZRow];
     
-    for (let i = 0; i < problem.constraints.length; i++) {
+    for (let i = 0; i < problem.constraints.length && i < basicVariables.length && i < tableau.length - 1; i++) {
       const basicVar = basicVariables[i];
-      if (basicVar < totalVars && Math.abs(correctCanonical[basicVar]) > 1e-10) {
+      if (basicVar !== undefined && basicVar !== null && !isNaN(basicVar) && basicVar < totalVars && Math.abs(correctCanonical[basicVar]) > 1e-10) {
         const factor = correctCanonical[basicVar];
         for (let j = 0; j <= totalVars; j++) {
           correctCanonical[j] -= factor * tableau[i][j];
@@ -707,14 +1079,14 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         ? (userCanonicalZRow[j] === '' ? 0 : parseFloat(userCanonicalZRow[j])) 
         : userCanonicalZRow[j];
       const numericValue = isNaN(userValue) ? 0 : userValue;
-      if (Math.abs(numericValue - correctCanonical[j]) > 1e-6) {
+      if (!numbersMatch(numericValue, correctCanonical[j])) {
         isCorrect = false;
         break;
       }
     }
     
     if (isCorrect) {
-      setFeedback('✅ Excellent! You correctly converted the Z-row to canonical form! All basic variables now have 0 coefficients.');
+      setFeedback('✅ Excellent! You correctly converted the (-f) row to canonical form! All basic variables now have 0 coefficients. Ready to begin the Simplex Method!');
       setFeedbackType('success');
       
       // Update tableau with the canonical form (convert strings/empty to numbers)
@@ -724,7 +1096,8 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         }
         return v;
       });
-      const completeTableau = [...tableau, numericCanonicalRow];
+      // Replace the last row (initial Z row) with the canonical Z row
+      const completeTableau = [...tableau.slice(0, -1), numericCanonicalRow];
       setTableau(completeTableau);
       setTableauHistory(prev => [...prev, {
         tableau: completeTableau,
@@ -736,14 +1109,265 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       setStep('select-entering');
       setShowHint(false);
     } else {
-      setFeedback('❌ Not quite right. Check your row operations. For each basic variable with non-zero coefficient in the Z-row, use: Z_new = Z_old - (coefficient) × constraint_row');
+      // Find which columns are incorrect to provide specific feedback
+      const incorrectCols: string[] = [];
+      for (let j = 0; j <= totalVars; j++) {
+        const userValue = typeof userCanonicalZRow[j] === 'string' 
+          ? (userCanonicalZRow[j] === '' ? 0 : parseFloat(userCanonicalZRow[j])) 
+          : userCanonicalZRow[j];
+        const numericValue = isNaN(userValue) ? 0 : userValue;
+        if (!numbersMatch(numericValue, correctCanonical[j])) {
+          const colName = j < numVariables 
+            ? `x${j + 1}` 
+            : j < numVariables + userSlackVars 
+            ? `s${j - numVariables + 1}` 
+            : 'b';
+          incorrectCols.push(colName);
+        }
+      }
+      setFeedback(`❌ Not quite right. Check columns: ${incorrectCols.join(', ')}. Remember: Z_new = Z_old - (coefficient) × Row for EACH basic variable. Make sure to apply ALL eliminations and compute each column carefully.`);
       setFeedbackType('error');
     }
+  };
+
+  const handleCanonicalWRowSubmit = () => {
+    // Calculate the correct canonical form for (-w) row by eliminating artificial variables
+    const correctCanonical = [...initialWRow];
+    
+    // Eliminate artificial variables (those that are basic)
+    for (let i = 0; i < currentProblem.constraints.length && i < basicVariables.length; i++) {
+      const basicVar = basicVariables[i];
+      // Check if this is an artificial variable
+      if (basicVar >= numVariables + userSlackVars && basicVar < totalVars) {
+        // Eliminate this artificial variable from the (-w) row
+        for (let j = 0; j <= totalVars + 1; j++) { // +1 for (-w) column, +1 for b column
+          correctCanonical[j] -= tableau[i][j];
+        }
+      }
+    }
+    
+    // Check if user's answer matches (convert strings/empty to numbers)
+    let isCorrect = true;
+    for (let j = 0; j <= totalVars + 1; j++) {
+      const userValue = typeof userCanonicalWRow[j] === 'string' 
+        ? (userCanonicalWRow[j] === '' ? 0 : parseFloat(userCanonicalWRow[j])) 
+        : userCanonicalWRow[j];
+      const numericValue = isNaN(userValue) ? 0 : userValue;
+      if (!numbersMatch(numericValue, correctCanonical[j])) {
+        isCorrect = false;
+        break;
+      }
+    }
+    
+    if (isCorrect) {
+      setFeedback('✅ Excellent! You correctly eliminated the artificial variables from the (-w) row! The tableau is now in canonical form.');
+      setFeedbackType('success');
+      
+      // Update tableau with the canonical form (convert strings/empty to numbers)
+      const numericCanonicalWRow = userCanonicalWRow.map(v => {
+        if (typeof v === 'string') {
+          return v === '' ? 0 : parseFloat(v) || 0;
+        }
+        return v;
+      });
+      
+      // Replace the last row (initial W row) with the canonical W row
+      const completeTableau = [...tableau.slice(0, -1), numericCanonicalWRow];
+      setTableau(completeTableau);
+      
+      // Check if the basic solution is already feasible
+      const wRowIdx = completeTableau.length - 1;
+      const wValue = -completeTableau[wRowIdx][totalVars + 1]; // Negative because it's the (-w) row
+      
+      if (Math.abs(wValue) < 1e-10) {
+        // w = 0, so all artificial variables = 0. Basic solution is already feasible!
+        setFeedback('🎉 Excellent! Notice that w = 0, which means all artificial variables equal 0 in the initial basic solution. This means the initial solution is already feasible for the original problem! Phase 1 solving is not needed. We can proceed directly to Phase 2.');
+        setFeedbackType('success');
+        setShowHint(false);
+        
+        // Transition directly to Phase 2 setup
+        setCurrentPhase(2);
+        setPhase1Iterations(0);
+        setIteration(0);
+        
+        // Remove artificial variables and (-w) column from tableau
+        const numConstraints = basicVariables.length; // Use basicVariables length since it matches actual constraint rows
+        const newTableau: number[][] = [];
+        const fRowIdx = completeTableau.length - 2; // (-f) row is second to last
+        
+        // Keep only constraint rows (remove (-f) and (-w) rows)
+        for (let i = 0; i < numConstraints; i++) {
+          const row: number[] = [];
+          // Keep decision variables
+          for (let j = 0; j < numVariables; j++) {
+            row.push(completeTableau[i][j]);
+          }
+          // Keep slack/surplus variables
+          for (let j = numVariables; j < numVariables + userSlackVars; j++) {
+            row.push(completeTableau[i][j]);
+          }
+          // Skip artificial variables (they're all 0 anyway)
+          // Skip (-w) column (index totalVars)
+          // Add b value (was at totalVars + 1)
+          row.push(completeTableau[i][totalVars + 1]);
+          newTableau.push(row);
+        }
+        
+        // Update basic variables - replace artificial variables with corresponding slack/surplus
+        const newBasicVars = basicVariables.map((bv, i) => {
+          if (bv >= numVariables + userSlackVars) {
+            // This is an artificial variable, need to find the surplus variable for this row
+            const constraint = problem.constraints[i];
+            if (!constraint) {
+              // Safety check: if constraint doesn't exist, keep the basic variable as is
+              return bv;
+            }
+            if (constraint.operator === '>=') {
+              // Find the surplus variable index for this constraint
+              let slackCount = 0;
+              for (let k = 0; k < i; k++) {
+                if (problem.constraints[k].operator === '<=' || problem.constraints[k].operator === '>=') {
+                  slackCount++;
+                }
+              }
+              return numVariables + slackCount;
+            } else if (constraint.operator === '=') {
+              // For = constraints with RHS = 0, we need a basic variable
+              // Find the first variable with coefficient = 1 in this row
+              for (let j = 0; j < numVariables + userSlackVars; j++) {
+                if (Math.abs(newTableau[i][j] - 1) < 1e-10) {
+                  // Check if this variable is not already basic in another row
+                  const isBasicElsewhere = newBasicVars.some((bvar, idx) => idx !== i && bvar === j);
+                  if (!isBasicElsewhere) {
+                    return j;
+                  }
+                }
+              }
+              // If no suitable variable found, use the first slack variable (fallback)
+              return numVariables;
+            }
+          }
+          return bv;
+        });
+        
+        setBasicVariables(newBasicVars);
+        setTotalVars(numVariables + userSlackVars);
+        
+        // Add the (-f) row (which is the Z row for Phase 2)
+        const zRow: number[] = [];
+        // Take from the (-f) row in the phase 1 tableau (fRowIdx)
+        for (let j = 0; j < numVariables; j++) {
+          zRow.push(completeTableau[fRowIdx][j]);
+        }
+        for (let j = numVariables; j < numVariables + userSlackVars; j++) {
+          zRow.push(completeTableau[fRowIdx][j]);
+        }
+        // Skip artificial variables and (-w) column
+        zRow.push(completeTableau[fRowIdx][totalVars + 1]); // b value
+        
+        newTableau.push(zRow);
+        
+        setCurrentPhase(2);
+        setPhase1Iterations(0); // No iterations were needed
+        setIteration(0); // Reset iteration counter for Phase 2
+        
+        // Automatically convert to canonical form by eliminating basic variables
+        const canonicalZRow = [...zRow];
+        for (let i = 0; i < currentProblem.constraints.length && i < basicVariables.length && i < newTableau.length - 1; i++) {
+          const basicVar = basicVariables[i];
+          if (basicVar !== undefined && basicVar !== null && !isNaN(basicVar) && basicVar < numVariables + userSlackVars && Math.abs(canonicalZRow[basicVar]) > 1e-10) {
+            const factor = canonicalZRow[basicVar];
+            for (let j = 0; j <= numVariables + userSlackVars; j++) {
+              canonicalZRow[j] -= factor * newTableau[i][j];
+            }
+          }
+        }
+        
+        // Update tableau with canonical Z row
+        const completeTableau = [...newTableau.slice(0, -1), canonicalZRow];
+        setTableau(completeTableau);
+        setTableauHistory([{
+          tableau: completeTableau,
+          basicVariables: basicVariables,
+          iteration: 0,
+          phase: 2
+        }]);
+        
+        setStep('select-entering');
+        setFeedback('🎉 w = 0! The basic solution is already feasible. Phase 2 objective row has been set up in canonical form. Ready to begin the Simplex Method!');
+        setFeedbackType('success');
+        setShowHint(false);
+      } else {
+        // w > 0, so we need to perform Phase 1 to minimize w
+        setTableauHistory([{
+          tableau: completeTableau,
+          basicVariables: basicVariables,
+          iteration: 0,
+          phase: 1,
+          numSlackVars: userSlackVars,
+          numArtificialVars: userArtificialVars
+        }]);
+        setStep('select-entering');
+        setShowHint(false);
+        setFeedback(`✅ Phase 1 tableau ready! The initial solution has w = ${wValue.toFixed(4)} (sum of artificial variables). Since w > 0, the initial solution is not feasible for the original problem. We need to minimize w to find a feasible solution. Find the entering variable.`);
+      }
+    } else {
+      // Find which columns are incorrect to provide specific feedback
+      const incorrectCols: string[] = []
+      for (let j = 0; j <= totalVars + 1; j++) {
+        const userValue = typeof userCanonicalWRow[j] === 'string' 
+          ? (userCanonicalWRow[j] === '' ? 0 : parseFloat(userCanonicalWRow[j])) 
+          : userCanonicalWRow[j];
+        const numericValue = isNaN(userValue) ? 0 : userValue;
+        if (!numbersMatch(numericValue, correctCanonical[j])) {
+          const colName = j < numVariables 
+            ? `x${j + 1}` 
+            : j < numVariables + userSlackVars 
+            ? `s${j - numVariables + 1}` 
+            : j < totalVars
+            ? `a${j - numVariables - userSlackVars + 1}`
+            : j === totalVars
+            ? '(-w)'
+            : 'b';
+          incorrectCols.push(colName);
+        }
+      }
+      setFeedback(`❌ Not quite right. Check columns: ${incorrectCols.join(', ')}. Remember: (-w)_new = (-w)_old - Row for EACH artificial basic variable. Make sure to apply eliminations for all artificial variables.`);
+      setFeedbackType('error');
+    }
+  };
+
+  const updateCanonicalWCell = (colIdx: number, value: string) => {
+    const newRow = JSON.parse(JSON.stringify(userCanonicalWRow));
+    
+    if (value === '') {
+      newRow[colIdx] = '';
+    } else {
+      const parsed = parseFloat(value);
+      // Allow intermediate typing states like "-", ".", "-.", "-1.", etc.
+      if (!isNaN(parsed)) {
+        newRow[colIdx] = parsed;
+      } else if (value === '-' || value === '.' || value === '-.' || value.match(/^-?\d*\.$/)) {
+        // Keep the incomplete input as a string for display
+        newRow[colIdx] = value;
+      } else {
+        // Invalid input, keep current value
+        return;
+      }
+    }
+    setUserCanonicalWRow(newRow);
   };
 
   const formatNumber = (num: number): string => {
     if (Math.abs(num) < 1e-10) return '0';
     return num.toFixed(3);
+  };
+
+  // Helper to compare numbers with rounding to 3 decimals (matching display precision)
+  const numbersMatch = (a: number, b: number): boolean => {
+    const roundedA = Math.round(a * 1000) / 1000;
+    const roundedB = Math.round(b * 1000) / 1000;
+    return Math.abs(roundedA - roundedB) < 0.001;
   };
 
   // Helper to remove leading zeros on Enter key press
@@ -762,7 +1386,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
 
   const getCorrectEnteringVariable = (): number => {
     // For Phase 1, use the (-w) row (last row)
-    // For Phase 2, use the Z row (last row)
+    // For Phase 2, use the (-f) row (last row)
     const objRow = tableau[tableau.length - 1];
     let mostNegative = -1e-10;
     let enteringVar = -1;
@@ -787,10 +1411,10 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     let leavingRow = -1;
     const rhsCol = tableau[0].length - 1;
     
-    // Number of constraint rows (exclude (-f) and (-w) rows in Phase 1, Z row in Phase 2)
+    // Number of constraint rows (exclude (-f) and (-w) rows in Phase 1, (-f) row in Phase 2)
     const numConstraintRows = needsPhase1 && currentPhase === 1
       ? tableau.length - 2  // Exclude (-f) and (-w) rows
-      : tableau.length - 1; // Exclude Z row
+      : tableau.length - 1; // Exclude (-f) row
     
     for (let i = 0; i < numConstraintRows; i++) {
       if (tableau[i][enteringVar] > 1e-10) {
@@ -812,7 +1436,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     const correctEntering = getCorrectEnteringVariable();
     const objRow = tableau[tableau.length - 1];
     
-    const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : 'Z row';
+    const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : '(-f) row';
     
     if (objRow[colIndex] >= -1e-10) {
       setFeedback(`❌ This column does not have a negative value in the ${rowLabel}. Select the variable that will be joining the basis by finding the column with the most negative value.`);
@@ -842,7 +1466,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
 
   const handleRowClick = (rowIndex: number) => {
     if (step !== 'select-leaving' || selectedEntering === null) return;
-    if (rowIndex === tableau.length - 1) return; // Can't select Z row
+    if (rowIndex === tableau.length - 1) return; // Can't select (-f) row
     
     const correctLeaving = getCorrectLeavingVariable(selectedEntering);
     const rhsCol = tableau[0].length - 1;
@@ -879,23 +1503,23 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       const canCalculate = tableau[i][selectedEntering!] > 1e-10;
       
       if (canCalculate) {
-        // Check b value
-        const correctB = tableau[i][rhsCol];
+        // Check b value (round to 3 decimal places for comparison)
+        const correctB = Math.round(tableau[i][rhsCol] * 1000) / 1000;
         const userBValue = typeof userBValues[i] === 'string' 
           ? (userBValues[i] === '' ? NaN : parseFloat(userBValues[i])) 
           : userBValues[i];
-        const numericB = isNaN(userBValue) ? NaN : userBValue;
+        const numericB = isNaN(userBValue) ? NaN : Math.round(userBValue * 1000) / 1000;
         
-        // Check entering column value
-        const correctEntering = tableau[i][selectedEntering!];
+        // Check entering column value (round to 3 decimal places for comparison)
+        const correctEntering = Math.round(tableau[i][selectedEntering!] * 1000) / 1000;
         const userEnteringValue = typeof userEnteringValues[i] === 'string' 
           ? (userEnteringValues[i] === '' ? NaN : parseFloat(userEnteringValues[i])) 
           : userEnteringValues[i];
-        const numericEntering = isNaN(userEnteringValue) ? NaN : userEnteringValue;
+        const numericEntering = isNaN(userEnteringValue) ? NaN : Math.round(userEnteringValue * 1000) / 1000;
         
         if (isNaN(numericB) || isNaN(numericEntering) || 
-            Math.abs(numericB - correctB) > 1e-6 || 
-            Math.abs(numericEntering - correctEntering) > 1e-6) {
+            Math.abs(numericB - correctB) > 0.001 || 
+            Math.abs(numericEntering - correctEntering) > 0.001) {
           isCorrect = false;
           incorrectRows.push(i);
         }
@@ -938,7 +1562,11 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       : userPivotDivisor;
     const numericDivisor = isNaN(divisorValue) ? 0 : divisorValue;
     
-    if (Math.abs(numericDivisor - pivotElement) < 1e-6) {
+    // Round both values to 3 decimals to match what's displayed to the user
+    const roundedPivot = Math.round(pivotElement * 1000) / 1000;
+    const roundedDivisor = Math.round(numericDivisor * 1000) / 1000;
+    
+    if (Math.abs(roundedDivisor - roundedPivot) < 0.001) {
       // Calculate the new tableau with the pivot row
       const newTableau = JSON.parse(JSON.stringify(tableau));
       for (let j = 0; j < newTableau[0].length; j++) {
@@ -972,7 +1600,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
           : userRowMultipliers[i];
         const userMultiplier = isNaN(userValue) ? 0 : userValue;
         
-        if (Math.abs(correctMultiplier - userMultiplier) > 1e-6) {
+        if (!numbersMatch(correctMultiplier, userMultiplier)) {
           isCorrect = false;
           let rowLabel;
           if (needsPhase1 && currentPhase === 1) {
@@ -980,7 +1608,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             else if (i === tableau.length - 2) rowLabel = '(-f) row';
             else rowLabel = `Row ${i + 1}`;
           } else {
-            rowLabel = i === tableau.length - 1 ? 'Z row' : `Row ${i + 1}`;
+            rowLabel = i === tableau.length - 1 ? '(-f) row' : `Row ${i + 1}`;
           }
           errorDetails.push(`${rowLabel}: expected ${formatNumber(correctMultiplier)}, got ${formatNumber(userMultiplier)}`);
         }
@@ -1029,7 +1657,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     
     // Move to optimality check step
     setStep('check-optimality');
-    setFeedback('✅ Perfect! The multipliers are correct. The new tableau has been calculated. Now examine the Z row and determine if the solution is optimal.');
+    setFeedback('✅ Perfect! The multipliers are correct. The new tableau has been calculated. Now examine the (-f) row and determine if the solution is optimal.');
     setFeedbackType('success');
   };
 
@@ -1089,7 +1717,9 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       console.log('User slack vars:', userSlackVars);
       console.log('User artificial vars:', userArtificialVars);
       
-      const newBasicVars = basicVariables.map((bv, idx) => {
+      // Only keep basic variables for constraint rows (not objective rows)
+      const numConstraintRows = tableau.length - 2; // Exclude (-f) and (-w) rows
+      const newBasicVars = basicVariables.slice(0, numConstraintRows).map((bv, idx) => {
         if (bv >= numVariables + userSlackVars) {
           console.error(`ERROR: Row ${idx} has artificial variable ${bv} as basic! This should not happen.`);
           // This shouldn't happen - artificial variables should be non-basic
@@ -1102,26 +1732,64 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       setBasicVariables(newBasicVars);
       
       setTotalVars(numVariables + userSlackVars);
-      setTableau(newTableau);
-      setStep('setup-phase2-objective');
-      const objRow2 = new Array(numVariables + userSlackVars + 1).fill(0);
-      setUserObjectiveRow(objRow2);
-      setFeedback('🎉 Phase 1 complete! Feasible solution found with w = 0. Artificial variables eliminated. Now transitioning to Phase 2 to optimize the original objective function.');
+      
+      // Automatically set up Phase 2 objective row
+      const objCoeffs = problem.isMaximization 
+        ? problem.objectiveCoefficients 
+        : problem.objectiveCoefficients.map(c => -c);
+      
+      const phase2ObjRow = new Array(numVariables + userSlackVars + 1).fill(0);
+      objCoeffs.forEach((coeff, i) => {
+        phase2ObjRow[i] = -coeff;
+      });
+      
+      // Add Phase 2 objective row to tableau
+      const tableauWithPhase2Obj = [...newTableau, phase2ObjRow];
+      
+      setCurrentPhase(2);
+      setPhase1Iterations(iteration);
+      setIteration(0); // Reset iteration counter for Phase 2
+      
+      // Automatically convert to canonical form by eliminating basic variables
+      const canonicalZRow = [...phase2ObjRow];
+      for (let i = 0; i < newBasicVars.length && i < tableauWithPhase2Obj.length - 1; i++) {
+        const basicVar = newBasicVars[i];
+        if (basicVar !== undefined && basicVar !== null && !isNaN(basicVar) && basicVar < numVariables + userSlackVars && Math.abs(canonicalZRow[basicVar]) > 1e-10) {
+          const factor = canonicalZRow[basicVar];
+          for (let j = 0; j <= numVariables + userSlackVars; j++) {
+            canonicalZRow[j] -= factor * tableauWithPhase2Obj[i][j];
+          }
+        }
+      }
+      
+      // Update tableau with canonical Z row
+      const completeTableau = [...tableauWithPhase2Obj.slice(0, -1), canonicalZRow];
+      setTableau(completeTableau);
+      setTableauHistory(prev => [...prev, {
+        tableau: completeTableau,
+        basicVariables: newBasicVars,
+        iteration: 0,
+        phase: 2
+      }]);
+      
+      setStep('select-entering');
+      setFeedback('🎉 Phase 1 complete! Feasible solution found with w = 0. Artificial variables eliminated. Phase 2 objective row has been set up in canonical form. Ready to continue with the Simplex Method!');
       setFeedbackType('success');
+      setShowHint(false);
       return;
     }
     
     if (userThinksOptimal === isActuallyOptimal) {
       if (isActuallyOptimal) {
         setStep('complete');
-        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : 'Z row';
+        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : '(-f) row';
         setFeedback(`🎉 Correct! The solution is optimal. All values in the ${rowLabel} are non-negative!`);
         setFeedbackType('success');
         setShowHint(false);
       } else {
         setIteration(iteration + 1);
         setStep('select-entering');
-        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : 'Z row';
+        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : '(-f) row';
         setFeedback(`✅ Correct! The solution is not yet optimal. There are still negative values in the ${rowLabel}. Select the next entering variable.`);
         setFeedbackType('success');
         setShowHint(false);
@@ -1136,12 +1804,12 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             negativeColumns.push(colLabel);
           }
         }
-        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : 'Z row';
+        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : '(-f) row';
         setFeedback(`❌ Not quite. The solution is not optimal yet. Look at the ${rowLabel} - there are still negative values in columns: ${negativeColumns.join(', ')}. The solution is only optimal when ALL values are non-negative.`);
         setFeedbackType('error');
       } else {
         // User thinks it's not optimal but it is
-        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : 'Z row';
+        const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row' : '(-f) row';
         setFeedback(`❌ Actually, this solution IS optimal! Look carefully at the ${rowLabel} - all values are non-negative (≥ 0). When this happens, we cannot improve the objective function further.`);
         setFeedbackType('error');
       }
@@ -1149,23 +1817,43 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
   };
 
   const getHint = () => {
-    if (step === 'setup-artificial' && !askedPhase1Question) {
+    if (step === 'check-feasibility') {
       // Hint for whether Phase 1 is needed
-      const geOrEqConstraints = problem.constraints.filter(c => c.operator === '>=' || c.operator === '=');
+      const geOrEqConstraints = currentProblem.constraints.filter(c => c.operator === '>=' || c.operator === '=');
       return `Consider the initial basic solution. For ≤ constraints, slack variables are positive in the basic solution. However, for ${geOrEqConstraints.length} constraint(s) with ≥ or =, we cannot use slack/surplus variables alone as they would be negative or zero, making the solution infeasible. When the initial basic solution is not feasible, we need Phase 1 to find a feasible starting point.`;
-    } else if (step === 'setup-artificial' && askedPhase1Question) {
+    } else if (step === 'setup-artificial') {
       // Hint for counting artificial variables
-      const geCount = problem.constraints.filter(c => c.operator === '>=').length;
-      const eqCount = problem.constraints.filter(c => c.operator === '=').length;
+      const geCount = currentProblem.constraints.filter(c => c.operator === '>=').length;
+      const eqCount = currentProblem.constraints.filter(c => c.operator === '=').length;
       return `Count constraints that need artificial variables: ${geCount} constraint(s) with ≥ (need surplus + artificial), ${eqCount} constraint(s) with = (need artificial only). Total artificial variables: ${geCount + eqCount}.`;
-    } else if (step === 'setup-phase2-objective') {
-      const objCoeffs = problem.isMaximization 
-        ? problem.objectiveCoefficients 
-        : problem.objectiveCoefficients.map(c => -c);
+    } else if (step === 'modify-constraints-artificial') {
+      // Hint for adding artificial variables to constraints
+      const constraint = currentProblem.constraints[currentConstraintIndex];
+      if (constraint.operator === '>=') {
+        return `This is a ≥ constraint. It already has a surplus variable (coefficient -1). Now add an artificial variable (coefficient 1) in the appropriate column. Other artificial variable columns should be 0.`;
+      } else if (constraint.operator === '=') {
+        return `This is an = constraint. It has no slack/surplus variables. Add an artificial variable (coefficient 1) in the appropriate column. Other artificial variable columns should be 0.`;
+      } else {
+        return `This is a ≤ constraint. It already has a slack variable and does NOT need an artificial variable. All artificial variable columns should be 0.`;
+      }
+    } else if (step === 'setup-phase1-objective') {
+      // Hint for Phase 1 objective function setup
+      const objExample = currentProblem.objectiveCoefficients.map((c, i) => {
+        return `${i > 0 && c >= 0 ? '+ ' : ''}${c}x${i + 1}`;
+      }).join(' ');
+      const transformedExample = currentProblem.objectiveCoefficients.map((c, i) => {
+        return `${i > 0 && -c >= 0 ? '+ ' : ''}${-c}x${i + 1}`;
+      }).join(' ');
+      return `In standard form, we write: Z - (${objExample}) = 0\n\nThis means: ${transformedExample} (slack variables = 0)`;
+    } else if (step === 'setup-objective') {
+      const objCoeffs = currentProblem.isMaximization 
+        ? currentProblem.objectiveCoefficients 
+        : currentProblem.objectiveCoefficients.map(c => -c);
       const hintRow = objCoeffs.map((c, i) => `x${i+1}: ${-c}`).join(', ');
-      return `For the original objective function, enter negated coefficients in standard form. ${hintRow}. Set all slack variables to 0, and b to 0. After you submit, basic variables will be automatically eliminated to achieve canonical form.`;
+      return `For the objective function, enter negated coefficients in standard form. ${hintRow}. Set all slack variables to 0.`;
     } else if (step === 'select-entering') {
-      return `Look for the most negative value in the (-f) row - this variable will be joining the basis.`;
+      const rowLabel = needsPhase1 && currentPhase === 1 ? '(-w) row' : '(-f) row';
+      return `Look for the most negative value in the ${rowLabel} - this variable will be joining the basis. If two values are equally the most negative, choose the leftmost one.`;
     } else if (step === 'select-leaving') {
       const rhsCol = tableau[0].length - 1;
       const correctLeaving = getCorrectLeavingVariable(selectedEntering!);
@@ -1173,13 +1861,13 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         return 'Problem is unbounded - no valid leaving variable can be found.';
       }
       const minRatio = tableau[correctLeaving][rhsCol] / tableau[correctLeaving][selectedEntering!];
-      return `Calculate b ÷ (entering column value) for each row with positive values. The minimum ratio is ${minRatio.toFixed(3)}.`;
+      return `Calculate b ÷ (entering column value) for each row with positive values. The minimum ratio is ${minRatio.toFixed(3)}. If two ratios are equally the smallest, choose the topmost row.`;
     } else if (step === 'calculate-ratios') {
       const correctLeaving = getCorrectLeavingVariable(selectedEntering!);
       if (correctLeaving === -1) {
         return 'Problem is unbounded - no valid leaving variable can be found.';
       }
-      return `For each row with a positive value in the entering column, calculate: ratio = b ÷ (entering column value). Enter 0 for rows with non-positive values.`;
+      return `For each row with a positive value in the entering column, calculate: ratio = b ÷ (entering column value). Enter 0 for rows with non-positive values. If two ratios are equally the smallest, choose the topmost row.`;
     } else if (step === 'calculate-pivot-row') {
       const pivotElement = tableau[selectedLeaving][selectedEntering];
       return `The pivot element is in Row ${selectedLeaving + 1}, Column ${selectedEntering + 1}. Its value is ${formatNumber(pivotElement)}. To create a 1 in the pivot position, divide the entire pivot row by this value.`;
@@ -1190,26 +1878,43 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       if (exampleRow >= tableau.length) exampleRow = tableau.length - 1;
       
       const factor = tableau[exampleRow][selectedEntering];
-      const rowLabel = exampleRow === tableau.length - 1 ? 'Z row' : `Row ${exampleRow + 1}`;
+      const rowLabel = exampleRow === tableau.length - 1 ? '(-f) row' : `Row ${exampleRow + 1}`;
       
       return `For each row, the multiplier is the value in the entering variable's column. For example, ${rowLabel} has ${formatNumber(factor)} in the entering column. Use the formula: New Row = Old Row - (Multiplier × New Pivot Row).`;
     } else if (step === 'convert-to-canonical') {
       // Find which basic variables need to be eliminated
       const varsToEliminate: string[] = [];
-      basicVariables.forEach((bv, i) => {
-        if (bv < totalVars && Math.abs(initialZRow[bv]) > 1e-10) {
-          const varName = bv < numVariables ? `x${bv + 1}` : `s${bv - numVariables + 1}`;
+      basicVariables.slice(0, tableau.length - 1).forEach((bv, i) => {
+        if (bv !== undefined && bv !== null && !isNaN(bv) && bv < totalVars && Math.abs(initialZRow[bv]) > 1e-10) {
+          const varName = bv < numVariables 
+            ? `x${bv + 1}` 
+            : bv < numVariables + userSlackVars 
+            ? `s${bv - numVariables + 1}` 
+            : `a${bv - numVariables - userSlackVars + 1}`;
           varsToEliminate.push(`${varName} (coefficient ${formatNumber(initialZRow[bv])} in Row ${i + 1})`);
         }
       });
       if (varsToEliminate.length > 0) {
-        return `Identify basic variables with non-zero coefficients in the Z-row: ${varsToEliminate.join(', ')}. For each one, perform: Z_new = Z_old - (Z_old[basicVar]) × constraint_row. Apply all eliminations to get the final canonical form.`;
+        return `Eliminate these basic variables from (-f) row: ${varsToEliminate.join(', ')}. For each, use: (-f)_new = (-f)_old - (coefficient) × Row. Work through each column: for column j, compute: (-f)_new[j] = (-f)_old[j] - (coefficient) × Row[j].`;
       }
-      return 'All basic variables already have 0 coefficients. The Z-row is already in canonical form!';
+      return 'All basic variables already have 0 coefficients. The (-f) row is already in canonical form!';
+    } else if (step === 'eliminate-artificial-w-row') {
+      // Find which artificial variables need to be eliminated
+      const varsToEliminate: string[] = [];
+      basicVariables.forEach((bv, i) => {
+        if (bv >= numVariables + userSlackVars && bv < totalVars) {
+          const varName = `a${bv - numVariables - userSlackVars + 1}`;
+          varsToEliminate.push(`${varName} (basic in Row ${i + 1})`);
+        }
+      });
+      if (varsToEliminate.length > 0) {
+        return `Eliminate these artificial variables from (-w) row: ${varsToEliminate.join(', ')}. For each artificial variable that is basic, use: (-w)_new = (-w)_old - Row. Work through each column: for column j, compute: (-w)_new[j] = (-w)_old[j] - Row[j].`;
+      }
+      return 'No artificial variables are basic. The (-w)-row is already in canonical form!';
     } else if (step === 'check-optimality') {
       const objRow = tableau[tableau.length - 1];
       const negativeCount = objRow.slice(0, -1).filter(v => v < -1e-10).length;
-      const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row (Phase 1 objective)' : 'Z row';
+      const rowLabel = needsPhase1 && currentPhase === 1 ? 'w row (Phase 1 objective)' : '(-f) row';
       const phaseContext = needsPhase1 && currentPhase === 1 
         ? ' In Phase 1, we are checking if we can eliminate all artificial variables (w = 0).'
         : '';
@@ -1241,7 +1946,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     });
     
     const optimalValue = tableau[tableau.length - 1][rhsCol];
-    const finalValue = problem.isMaximization ? optimalValue : -optimalValue;
+    const finalValue = currentProblem.isMaximization ? optimalValue : -optimalValue;
     
     return { solution, optimalValue: finalValue };
   };
@@ -1266,10 +1971,10 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     
     // Problem statement
     doc.setFontSize(12);
-    doc.text(`Objective: ${problem.isMaximization ? 'Maximize' : 'Minimize'}`, 20, yPos);
+    doc.text(`Objective: ${currentProblem.isMaximization ? 'Maximize' : 'Minimize'}`, 20, yPos);
     yPos += lineHeight;
     
-    const objText = `Z = ${problem.objectiveCoefficients.map((c, i) => `${c}x${i+1}`).join(' + ')}`;
+    const objText = `Z = ${currentProblem.objectiveCoefficients.map((c, i) => `${c}x${i+1}`).join(' + ')}`;
     doc.setFontSize(10);
     doc.text(objText, 20, yPos);
     yPos += lineHeight * 1.5;
@@ -1280,7 +1985,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     yPos += lineHeight;
     
     doc.setFontSize(10);
-    problem.constraints.forEach((constraint, i) => {
+    currentProblem.constraints.forEach((constraint, i) => {
       if (yPos > pageHeight - 20) {
         doc.addPage();
         yPos = 20;
@@ -1358,7 +2063,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         phase1Tableaus.forEach((snapshot, idx) => {
           const t = snapshot.tableau;
           const bv = snapshot.basicVariables;
-          const numConstraints = t.length - 1;
+          const numConstraints = bv.length;
           const snapshotNumCols = t[0].length - 1 - numVariables;
           
           if (yPos > pageHeight - 80) {
@@ -1370,7 +2075,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
           doc.text(`Iteration ${snapshot.iteration}`, 20, yPos);
           yPos += lineHeight;
           
-          // Generate proper headers for Phase 1 (includes slack and artificial vars)
+          // Generate proper headers for Phase 1 (includes slack, artificial, (-f) and (-w) columns)
           const slackCount = snapshot.numSlackVars || 0;
           const artificialCount = snapshot.numArtificialVars || 0;
           const slackHeaders = Array.from({ length: slackCount }, (_, i) => `s${i+1}`);
@@ -1381,6 +2086,8 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             ...Array.from({ length: numVariables }, (_, i) => `x${i+1}`),
             ...slackHeaders,
             ...artificialHeaders,
+            '(-f)',
+            '(-w)',
             'RHS'
           ];
           
@@ -1396,7 +2103,8 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
               }
               return [basicVar, ...row.map(v => formatNumber(v))];
             }),
-            ['w', ...t[numConstraints].map(v => formatNumber(v))]
+            ['(-f)', ...t[numConstraints].map(v => formatNumber(v))],
+            ['(-w)', ...t[numConstraints + 1].map(v => formatNumber(v))]
           ];
           
           autoTable(doc, {
@@ -1449,6 +2157,9 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             'RHS'
           ];
           
+          // Use appropriate objective row label based on whether Phase 1 was used
+          const objectiveRowLabel = needsPhase1 ? '(-f)' : 'Z';
+          
           const body = [
             ...t.slice(0, numConstraints).map((row, i) => {
               const basicVar = bv[i] < numVariables 
@@ -1456,7 +2167,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 : `s${bv[i] - numVariables + 1}`;
               return [basicVar, ...row.map(v => formatNumber(v))];
             }),
-            ['Z', ...t[numConstraints].map(v => formatNumber(v))]
+            [objectiveRowLabel, ...t[numConstraints].map(v => formatNumber(v))]
           ];
           
           autoTable(doc, {
@@ -1492,11 +2203,11 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     const problemData = [
       ['Interactive Simplex Method Solution'],
       [],
-      ['Optimization Type:', problem.isMaximization ? 'Maximize' : 'Minimize'],
-      ['Objective Function:', problem.objectiveCoefficients.map((c, i) => `${c}x${i+1}`).join(' + ')],
+      ['Optimization Type:', currentProblem.isMaximization ? 'Maximize' : 'Minimize'],
+      ['Objective Function:', currentProblem.objectiveCoefficients.map((c, i) => `${c}x${i+1}`).join(' + ')],
       [],
       ['Constraints:'],
-      ...problem.constraints.map((c, i) => [
+      ...currentProblem.constraints.map((c, i) => [
         `Constraint ${i+1}:`,
         c.coefficients.map((coef, j) => `${coef}x${j+1}`).join(' + '),
         c.operator,
@@ -1544,7 +2255,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         phase1Tableaus.forEach((snapshot, idx) => {
           const t = snapshot.tableau;
           const bv = snapshot.basicVariables;
-          const numConstraints = t.length - 1;
+          const numConstraints = bv.length;
           const snapshotNumCols = t[0].length - 1 - numVariables;
           
           // Generate proper headers for Phase 1 (includes slack and artificial vars)
@@ -1558,6 +2269,8 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             ...Array.from({ length: numVariables }, (_, i) => `x${i+1}`),
             ...slackHeaders,
             ...artificialHeaders,
+            '(-f)',
+            '(-w)',
             'RHS'
           ];
           
@@ -1573,12 +2286,15 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             return [basicVar, ...row.map(v => parseFloat(formatNumber(v)))];
           });
           
-          const wRow = ['w', ...t[numConstraints].map(v => parseFloat(formatNumber(v)))];
+          // Phase 1 has two objective rows: (-f) and (-w)
+          const fRow = ['(-f)', ...t[numConstraints].map(v => parseFloat(formatNumber(v)))];
+          const wRow = ['(-w)', ...t[numConstraints + 1].map(v => parseFloat(formatNumber(v)))];
           
           const tableauData = [
             [`Phase 1 - Iteration ${snapshot.iteration}`],
             headers,
             ...rows,
+            fRow,
             wRow
           ];
           
@@ -1609,14 +2325,16 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             return [basicVar, ...row.map(v => parseFloat(formatNumber(v)))];
           });
           
-          const zRow = ['Z', ...t[numConstraints].map(v => parseFloat(formatNumber(v)))];
+          // Use appropriate objective row label based on whether Phase 1 was used
+          const objectiveRowLabel = needsPhase1 ? '(-f)' : 'Z';
+          const objectiveRow = [objectiveRowLabel, ...t[numConstraints].map(v => parseFloat(formatNumber(v)))];
           
           const phaseLabel = needsPhase1 ? 'Phase 2' : 'Simplex';
           const tableauData = [
             [`${phaseLabel} - Iteration ${snapshot.iteration}`],
             headers,
             ...rows,
-            zRow
+            objectiveRow
           ];
           
           const tableauSheet = XLSX.utils.aoa_to_sheet(tableauData);
@@ -1634,7 +2352,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     const progressData = {
       version: '1.0',
       timestamp: new Date().toISOString(),
-      problem,
+      problem: currentProblem,
       state: {
         tableau,
         basicVariables,
@@ -1707,6 +2425,12 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         throw new Error('Invalid progress file format');
       }
 
+      // Set flag to prevent useEffect from resetting state
+      setIsLoadingProgress(true);
+
+      // Restore problem definition
+      setCurrentProblem(progressData.problem);
+
       // Restore state
       const state = progressData.state;
       setTableau(state.tableau);
@@ -1741,29 +2465,15 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       setFeedbackType('success');
       setFeedback('Progress loaded successfully! Continue from where you left off.');
       
+      // Clear the loading flag after state is updated
+      setTimeout(() => setIsLoadingProgress(false), 0);
+      
       toast.success('Progress loaded successfully!');
     } catch (error) {
+      setIsLoadingProgress(false);
       toast.error('Failed to load progress. Please check the file format.');
       console.error(error);
     }
-  };
-
-  const handleLoadFromFile = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const content = e.target?.result as string;
-          loadProgress(content);
-        };
-        reader.readAsText(file);
-      }
-    };
-    input.click();
   };
 
   const handleLoadFromClipboard = async () => {
@@ -1776,9 +2486,22 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
     }
   };
 
-  if (tableau.length === 0 && step !== 'setup-slack' && step !== 'setup-artificial' && step !== 'setup-constraints' && step !== 'setup-phase1-objective' && step !== 'setup-phase2-objective' && step !== 'setup-objective') return <div>Loading...</div>;
+  if (tableau.length === 0 && step !== 'setup-slack' && step !== 'check-feasibility' && step !== 'setup-artificial' && step !== 'modify-constraints-artificial' && step !== 'setup-constraints' && step !== 'setup-phase1-objective' && step !== 'setup-objective') return <div>Loading...</div>;
 
-  const numConstraints = tableau.length > 0 ? tableau.length - 1 : 0;
+  const numConstraints = tableau.length > 0 
+    ? (needsPhase1 && currentPhase === 1 && step !== 'check-feasibility' ? tableau.length - 2 : tableau.length - 1)
+    : 0;
+  
+  // Debug: Check if basicVariables matches constraint rows
+  if (tableau.length > 0 && basicVariables.length !== numConstraints) {
+    console.warn(`Mismatch: tableau has ${numConstraints} constraint rows but basicVariables has ${basicVariables.length} elements`);
+    console.log('Tableau rows:', tableau.length);
+    console.log('Basic variables:', basicVariables);
+    console.log('Current step:', step);
+    console.log('Current phase:', currentPhase);
+    console.log('Needs Phase 1:', needsPhase1);
+    console.log('Problem constraints:', currentProblem.constraints.length);
+  }
   // For Phase 1, exclude both (-w) and b columns; for Phase 2, exclude only b column
   const numCols = tableau.length > 0 && tableau[0] 
     ? (needsPhase1 && currentPhase === 1 ? tableau[0].length - 2 : tableau[0].length - 1)
@@ -1804,11 +2527,14 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 )}
                 <Badge variant={step === 'complete' ? 'default' : 'outline'}>
                   {step === 'setup-slack' && 'Setup: Count Slack Variables'}
-                  {step === 'setup-artificial' && 'Setup: Count Artificial Variables'}
                   {step === 'setup-constraints' && 'Setup: Build Constraint Rows'}
-                  {step === 'setup-phase1-objective' && 'Setup: Build Phase 1 Objective'}
-                  {step === 'setup-phase2-objective' && 'Setup: Build Phase 2 Objective'}
                   {step === 'setup-objective' && 'Setup: Build Objective Row'}
+                  {step === 'check-feasibility' && 'Setup: Check Feasibility'}
+                  {step === 'setup-artificial' && 'Setup: Count Artificial Variables'}
+                  {step === 'modify-constraints-artificial' && 'Setup: Add Artificial Variables to Constraints'}
+                  {step === 'setup-phase1-objective' && 'Setup: Build Phase 1 Objective (-w row)'}
+
+                  {step === 'eliminate-artificial-w-row' && 'Eliminate Artificial Variables from (-w) Row'}
                   {step === 'convert-to-canonical' && 'Convert to Canonical Form'}
                   {step === 'select-entering' && 'Step 1: Select Entering Variable'}
                   {step === 'select-leaving' && 'Step 2: Select Leaving Variable'}
@@ -1852,20 +2578,6 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 </Tooltip>
               </TooltipProvider>
 
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button onClick={handleLoadFromFile} variant="outline" size="sm">
-                      <Upload className="w-4 h-4 mr-2" />
-                      Load
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Load progress from a file</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-
               <Button onClick={resetToSetup} variant="outline" size="sm">
                 <RotateCcw className="w-4 h-4 mr-2" />
                 Restart
@@ -1895,7 +2607,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             </AlertDescription>
           </Alert>
 
-          {!['complete', 'setup-constraints', 'setup-slack', 'setup-phase1-objective', 'setup-phase2-objective', 'setup-objective'].includes(step) && (
+          {!['complete', 'setup-constraints', 'setup-slack', 'check-feasibility', 'setup-artificial', 'setup-phase1-objective', 'setup-objective'].includes(step) && (
             <div className="mt-3 flex gap-2">
               <Button
                 onClick={() => setShowHint(!showHint)}
@@ -1937,7 +2649,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             <div>
               <div className="text-sm font-medium text-gray-600 mb-1">Optimization Type:</div>
               <div className="flex items-center gap-2">
-                {problem.isMaximization ? (
+                {currentProblem.isMaximization ? (
                   <>
                     <TrendingUp className="w-4 h-4 text-green-600" />
                     <span>Maximize</span>
@@ -1956,7 +2668,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             <div>
               <div className="text-sm font-medium text-gray-600 mb-1">Objective Function:</div>
               <div className="font-mono text-sm">
-                Z = {problem.objectiveCoefficients.map((c, i) => {
+                Z = {currentProblem.objectiveCoefficients.map((c, i) => {
                   const sign = c >= 0 && i > 0 ? '+ ' : '';
                   return `${sign}${c}x${i + 1}`;
                 }).join(' ')}
@@ -1968,7 +2680,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             <div>
               <div className="text-sm font-medium text-gray-600 mb-2">Constraints:</div>
               <div className="space-y-1">
-                {problem.constraints.map((constraint, i) => (
+                {currentProblem.constraints.map((constraint, i) => (
                   <div key={i} className="font-mono text-sm pl-3">
                     {constraint.coefficients.map((c, j) => {
                       const sign = c >= 0 && j > 0 ? '+ ' : '';
@@ -1982,14 +2694,14 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
             <Separator />
 
             <div className="text-xs text-gray-500">
-              Variables: {problem.numVariables} | Constraints: {problem.constraints.length}
+              Variables: {currentProblem.numVariables} | Constraints: {currentProblem.constraints.length}
             </div>
           </div>
         </CardContent>
       </Card>
 
       {/* Phase Information Card - Show during Two-Phase Method */}
-      {needsPhase1 && step !== 'setup-slack' && step !== 'setup-artificial' && step !== 'setup-constraints' && (
+      {needsPhase1 && step !== 'setup-slack' && step !== 'setup-artificial' && step !== 'modify-constraints-artificial' && step !== 'setup-constraints' && step !== 'setup-objective' && step !== 'check-feasibility' && (
         <Card className={currentPhase === 1 ? 'bg-orange-50 border-orange-200' : 'bg-indigo-50 border-indigo-200'}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -2132,7 +2844,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                   className="w-20"
                 />
               </div>
-              <Button onClick={handleSlackVarsSubmit} size="sm">
+              <Button onClick={handleSlackVarsSubmit} size="sm" className={feedbackType === 'error' ? 'highlight-error' : 'highlight-next-step'}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Next
               </Button>
@@ -2141,13 +2853,23 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         </Card>
       )}
 
-      {step === 'setup-artificial' && !askedPhase1Question && tableau.length > 0 && (
+      {step === 'check-feasibility' && tableau.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <HelpCircle className="w-6 h-6 text-orange-600" />
-              Check Initial Basic Solution Feasibility
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <HelpCircle className="w-6 h-6 text-orange-600" />
+                Check Initial Basic Solution Feasibility
+              </CardTitle>
+              <Button
+                onClick={() => setShowHint(!showHint)}
+                variant="outline"
+                size="sm"
+              >
+                <HelpCircle className="w-4 h-4 mr-2" />
+                {showHint ? 'Hide Hint' : 'Show Hint'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
@@ -2170,24 +2892,40 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                             <span className="text-gray-500">s<sub>{i + 1}</sub></span>
                           </th>
                         ))}
+                        <th className="border p-2 bg-yellow-100">(-f)</th>
                         <th className="border p-2 bg-gray-100">b</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {tableau.slice(0, -1).map((row, i) => (
-                        <tr key={i}>
-                          <td className="border p-2 text-center bg-gray-50">
-                            Row {i + 1}
-                          </td>
-                          {row.map((value, j) => (
-                            <td key={j} className="border p-2 text-center tabular-nums">
-                              {formatNumber(value)}
+                      {tableau.slice(0, -1).map((row, i) => {
+                        const bv = basicVariables[i];
+                        let varName = '';
+                        if (bv !== undefined && bv !== null && !isNaN(bv) && bv >= 0) {
+                          if (bv < numVariables) {
+                            varName = `x${bv + 1}`;
+                          } else if (bv < numVariables + userSlackVars) {
+                            varName = `s${bv - numVariables + 1}`;
+                          } else {
+                            varName = `a${bv - numVariables - userSlackVars + 1}`;
+                          }
+                        } else {
+                          varName = `Row ${i + 1}`;
+                        }
+                        return (
+                          <tr key={i}>
+                            <td className="border p-2 text-center bg-gray-50">
+                              {varName}
                             </td>
-                          ))}
-                        </tr>
-                      ))}
+                            {row.map((value, j) => (
+                              <td key={j} className="border p-2 text-center tabular-nums">
+                                {formatNumber(value)}
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
                       <tr className="bg-yellow-50">
-                        <td className="border p-2 text-center">Z</td>
+                        <td className="border p-2 text-center">(-f)</td>
                         {tableau[tableau.length - 1].map((value, j) => (
                           <td key={j} className="border p-2 text-center tabular-nums">
                             {formatNumber(value)}
@@ -2199,50 +2937,52 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 </div>
               </div>
               
-              <div className="p-4 bg-orange-50 rounded-lg space-y-3">
-                <div>
-                  <p className="text-sm mb-2"><strong>📋 Your Constraints:</strong></p>
-                  <div className="space-y-1 text-xs">
-                    {problem.constraints.map((c, i) => (
-                      <div key={i} className="flex items-center gap-2 p-2 bg-white rounded">
-                        <span className="text-gray-600">Constraint {i + 1}:</span>
-                        <span className="font-mono">
-                          {c.coefficients.map((coef, j) => {
-                            const sign = coef >= 0 && j > 0 ? '+ ' : '';
-                            return `${sign}${coef}x${j + 1}`;
-                          }).join(' ')} {c.operator === '<=' ? '≤' : c.operator === '>=' ? '≥' : '='} {c.rhs}
-                        </span>
-                        <Badge variant={c.operator === '<=' ? 'secondary' : 'destructive'} className="text-xs">
-                          {c.operator}
-                        </Badge>
-                      </div>
-                    ))}
+              {showHint && (
+                <div className="p-4 bg-orange-50 rounded-lg space-y-3">
+                  <div>
+                    <p className="text-sm mb-2"><strong>📋 Your Constraints:</strong></p>
+                    <div className="space-y-1 text-xs">
+                      {problem.constraints.map((c, i) => (
+                        <div key={i} className="flex items-center gap-2 p-2 bg-white rounded">
+                          <span className="text-gray-600">Constraint {i + 1}:</span>
+                          <span className="font-mono">
+                            {c.coefficients.map((coef, j) => {
+                              const sign = coef >= 0 && j > 0 ? '+ ' : '';
+                              return `${sign}${coef}x${j + 1}`;
+                            }).join(' ')} {c.operator === '<=' ? '≤' : c.operator === '>=' ? '≥' : '='} {c.rhs}
+                          </span>
+                          <Badge variant={c.operator === '<=' ? 'secondary' : 'destructive'} className="text-xs">
+                            {c.operator}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="pt-3 border-t border-orange-200">
+                    <p className="text-sm mb-2"><strong>🤔 Think About:</strong></p>
+                    <div className="text-xs text-gray-700 space-y-2">
+                      <p>
+                        • For <strong>≤ constraints</strong>: Slack variables can be in the initial basic solution (they're positive)
+                      </p>
+                      <p>
+                        • For <strong>≥ constraints</strong>: Surplus variables would be <strong>negative</strong> in the initial basic solution
+                      </p>
+                      <p>
+                        • For <strong>= constraints</strong>: No slack variable at all - we need a basic variable!
+                      </p>
+                      <p className="pt-2 text-orange-800">
+                        When the initial basic solution is <strong>not feasible</strong> (would have negative values or no basic variables), 
+                        we need <strong>Phase 1</strong> to find a feasible starting point using artificial variables.
+                      </p>
+                    </div>
                   </div>
                 </div>
-                
-                <div className="pt-3 border-t border-orange-200">
-                  <p className="text-sm mb-2"><strong>🤔 Think About:</strong></p>
-                  <div className="text-xs text-gray-700 space-y-2">
-                    <p>
-                      • For <strong>≤ constraints</strong>: Slack variables can be in the initial basic solution (they're positive)
-                    </p>
-                    <p>
-                      • For <strong>≥ constraints</strong>: Surplus variables would be <strong>negative</strong> in the initial basic solution
-                    </p>
-                    <p>
-                      • For <strong>= constraints</strong>: No slack variable at all - we need a basic variable!
-                    </p>
-                    <p className="pt-2 text-orange-800">
-                      When the initial basic solution is <strong>not feasible</strong> (would have negative values or no basic variables), 
-                      we need <strong>Phase 1</strong> to find a feasible starting point using artificial variables.
-                    </p>
-                  </div>
-                </div>
-              </div>
+              )}
 
               <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                 <p className="text-sm mb-3">
-                  <strong>Question: Is the initial basic solution feasible (can all slack/surplus variables be non-negative)?</strong>
+                  <strong>Question: Is the initial basic solution feasible (can all slack/surplus variables be non-negative and do all constraints, including equalities, have basic variables)?</strong>
                 </p>
                 <div className="flex gap-3">
                   <Button 
@@ -2268,7 +3008,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         </Card>
       )}
 
-      {step === 'setup-artificial' && askedPhase1Question && (
+      {step === 'setup-artificial' && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -2307,9 +3047,110 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                   className="w-20"
                 />
               </div>
-              <Button onClick={handleArtificialVarsSubmit} size="sm">
+              <Button onClick={handleArtificialVarsSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Next
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === 'modify-constraints-artificial' && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <Edit className="w-6 h-6 text-orange-600" />
+                Add Artificial Variables to Constraint Rows
+              </CardTitle>
+              <Button
+                onClick={() => setShowHint(!showHint)}
+                variant="outline"
+                size="sm"
+              >
+                <HelpCircle className="w-4 h-4 mr-2" />
+                {showHint ? 'Hide Hint' : 'Show Hint'}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {showHint && (
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <p className="text-sm whitespace-pre-line">
+                    {getHint()}
+                  </p>
+                </div>
+              )}
+              
+              <div className="p-4 bg-orange-50 rounded-lg">
+                <p className="mb-2">
+                  <strong>Constraint {currentConstraintIndex + 1} of {problem.constraints.length}:</strong> {' '}
+                  {problem.constraints[currentConstraintIndex].coefficients.map((c, i) => (
+                    <span key={i}>
+                      {i > 0 && (c >= 0 ? ' + ' : ' ')}
+                      {c}x<sub>{i + 1}</sub>
+                    </span>
+                  ))} {' '}
+                  <strong>{problem.constraints[currentConstraintIndex].operator}</strong> {' '}
+                  {problem.constraints[currentConstraintIndex].rhs}
+                </p>
+                <p className="text-sm text-gray-600 mt-2">
+                  Add artificial variables (a<sub>1</sub>, a<sub>2</sub>, ...) to the appropriate constraints. 
+                  Each ≥ or = constraint needs one artificial variable.
+                </p>
+              </div>
+              
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr>
+                      {Array.from({ length: numVariables }, (_, i) => (
+                        <th key={i} className="border p-2 bg-gray-100">
+                          x<sub>{i + 1}</sub>
+                        </th>
+                      ))}
+                      {Array.from({ length: userSlackVars }, (_, i) => (
+                        <th key={i} className="border p-2 bg-gray-100">
+                          <span className="text-gray-500">s<sub>{i + 1}</sub></span>
+                        </th>
+                      ))}
+                      {Array.from({ length: userArtificialVars }, (_, i) => (
+                        <th key={i} className="border p-2 bg-orange-100">
+                          <span className="text-orange-600">a<sub>{i + 1}</sub></span>
+                        </th>
+                      ))}
+                      <th className="border p-2 bg-gray-100">b</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      {userConstraintRows[currentConstraintIndex]?.map((value, j) => (
+                        <td key={j} className="border p-2 text-center">
+                          <Input
+                            type="number"
+                            value={value}
+                            onChange={(e) => updateConstraintCell(currentConstraintIndex, j, e.target.value)}
+                            onKeyDown={(e) => handleEnterKeyPress(e, value, (val) => updateConstraintCell(currentConstraintIndex, j, val))}
+                            className={`w-20 text-center ${
+                              j >= numVariables + userSlackVars && j < numVariables + userSlackVars + userArtificialVars 
+                                ? 'bg-orange-50' 
+                                : ''
+                            }`}
+                            step="0.1"
+                            disabled={j < numVariables + userSlackVars || j === userConstraintRows[currentConstraintIndex].length - 1}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              
+              <Button onClick={handleModifiedConstraintRowSubmit} size="sm" className={getHighlightClass()}>
+                <ArrowRight className="w-4 h-4 mr-2" />
+                Check Answer
               </Button>
             </div>
           </CardContent>
@@ -2356,14 +3197,16 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                        problem.constraints[currentConstraintIndex].operator === '>=' ? '≥' : '='}{' '}
                   {problem.constraints[currentConstraintIndex].rhs}
                 </p>
-                <p className="text-sm text-gray-600">
-                  {problem.constraints[currentConstraintIndex].operator === '<=' && 
-                    'For ≤ constraints, add a slack variable (coefficient = 1)'}
-                  {problem.constraints[currentConstraintIndex].operator === '>=' && 
-                    'For ≥ constraints, add a surplus variable (coefficient = -1) and an artificial variable (coefficient = 1)'}
-                  {problem.constraints[currentConstraintIndex].operator === '=' && 
-                    'For = constraints, add an artificial variable (coefficient = 1)'}
-                </p>
+                {showConstraintExplanation && (
+                  <p className="text-sm text-gray-600">
+                    {problem.constraints[currentConstraintIndex].operator === '<=' && 
+                      'For ≤ constraints, add a slack variable (coefficient = 1)'}
+                    {problem.constraints[currentConstraintIndex].operator === '>=' && 
+                      'For ≥ constraints, add a surplus variable (coefficient = -1) and an artificial variable (coefficient = 1)'}
+                    {problem.constraints[currentConstraintIndex].operator === '=' && 
+                      'For = constraints, add an artificial variable (coefficient = 1)'}
+                  </p>
+                )}
               </div>
               
               <div className="overflow-x-auto">
@@ -2418,7 +3261,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 </table>
               </div>
               
-              <Button onClick={handleConstraintRowSubmit} size="sm">
+              <Button onClick={handleConstraintRowSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Check Answer
               </Button>
@@ -2430,10 +3273,20 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
       {step === 'setup-phase1-objective' && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Plus className="w-6 h-6 text-orange-600" />
-              Setup Phase 1 Objective Function
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <Plus className="w-6 h-6 text-orange-600" />
+                Setup Phase 1 Objective Function
+              </CardTitle>
+              <Button
+                onClick={() => setShowHint(!showHint)}
+                variant="outline"
+                size="sm"
+              >
+                <HelpCircle className="w-4 h-4 mr-2" />
+                {showHint ? 'Hide Hint' : 'Show Hint'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
@@ -2446,6 +3299,14 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                   <strong>Note:</strong> After entering, we'll eliminate artificial variables that are in the basis.
                 </p>
               </div>
+              
+              {showHint && (
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <p className="text-sm whitespace-pre-line">
+                    {getHint()}
+                  </p>
+                </div>
+              )}
               
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
@@ -2466,7 +3327,6 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                           <span className="text-orange-600">a<sub>{i + 1}</sub></span>
                         </th>
                       ))}
-                      <th className="border p-2 bg-gray-100">b</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2490,7 +3350,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 </table>
               </div>
               
-              <Button onClick={handleObjectiveRowSubmit} size="sm">
+              <Button onClick={handleObjectiveRowSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Check Answer
               </Button>
@@ -2499,83 +3359,278 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         </Card>
       )}
 
-      {step === 'setup-phase2-objective' && (
+      {step === 'eliminate-artificial-w-row' && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Plus className="w-6 h-6 text-indigo-600" />
-              Setup Phase 2 Objective Function (Z-row)
+              <Calculator className="w-6 h-6 text-orange-600" />
+              Eliminate Artificial Variables from (-w) Row
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              <div className="p-4 bg-indigo-50 rounded-lg space-y-3">
+              <div className="p-4 bg-orange-50 rounded-lg space-y-3">
                 <p className="text-sm">
-                  <strong>Phase 2:</strong> Now optimize the original objective function using the feasible solution from Phase 1.
+                  <strong>Goal:</strong> Eliminate all artificial variables from the (-w) row so they have 0 coefficients.
                 </p>
                 <p className="text-sm text-gray-700">
-                  <strong>Original Objective:</strong> {problem.isMaximization ? 'Maximize' : 'Minimize'} Z = {' '}
-                  {problem.objectiveCoefficients.map((c, i) => (
-                    <span key={i}>
-                      {i > 0 && (c >= 0 ? ' + ' : ' ')}{c}x<sub>{i + 1}</sub>
-                    </span>
-                  ))}
+                  <strong>Current Basic Variables:</strong> {' '}
+                  {basicVariables.map((bv, i) => {
+                    if (bv === undefined || bv === null || isNaN(bv)) return null;
+                    const varName = bv < numVariables 
+                      ? `x${bv + 1}` 
+                      : bv < numVariables + userSlackVars 
+                      ? `s${bv - numVariables + 1}` 
+                      : `a${bv - numVariables - userSlackVars + 1}`;
+                    return (
+                      <span key={i} className="inline-block mr-2 px-2 py-1 bg-white rounded">
+                        Row {i + 1}: {varName}
+                      </span>
+                    );
+                  }).filter(Boolean)}
                 </p>
-                <div className="pt-2 border-t border-indigo-200">
-                  <p className="text-sm mb-2"><strong>📝 How to set up the Z-row:</strong></p>
-                  <ol className="text-xs text-gray-700 space-y-1 ml-4 list-decimal">
-                    <li><strong>Step 1:</strong> Enter coefficients in standard form (negated for maximization)</li>
-                    <li><strong>Step 2:</strong> Set slack variable coefficients to 0</li>
-                    <li><strong>Step 3:</strong> Set RHS to 0</li>
-                    <li><strong>Step 4:</strong> After submission, we'll convert to <strong>canonical form</strong> by eliminating basic variables</li>
-                  </ol>
-                </div>
-                <div className="p-2 bg-white rounded border border-indigo-300">
-                  <p className="text-xs text-indigo-900">
-                    <strong>⚠️ Canonical Form:</strong> For a tableau to be in canonical form, the Z-row must have 0 coefficients 
-                    for all basic variables. This ensures we can correctly identify entering variables. We'll automatically 
-                    eliminate basic variables using row operations after you enter the initial Z-row.
-                  </p>
+                
+                <div className="pt-2 border-t border-orange-200">
+                  <p className="text-sm mb-2"><strong>📝 How to Eliminate Artificial Variables:</strong></p>
+                  <div className="text-xs text-gray-700 space-y-2 p-3 bg-white rounded">
+                    <p><strong>Method:</strong> Use row operations to eliminate artificial variables from the (-w) row.</p>
+                    <p className="text-orange-700">
+                      <strong>Formula:</strong> (-w)_new = (-w)_old - (sum of the constraint rows that have artificial variables)
+                    </p>
+                    <p>Calculate this as a single operation by adding all rows with artificial basic variables, then subtracting from (-w)_old.</p>
+                  </div>
+                  
+                  <div className="mt-3 space-y-2">
+                    <p className="text-sm"><strong>Calculation:</strong></p>
+                    {(() => {
+                      const artificialRows = basicVariables.map((bv, i) => {
+                        if (bv < numVariables + userSlackVars || bv >= totalVars) return null;
+                        return { index: i, varName: `a${bv - numVariables - userSlackVars + 1}` };
+                      }).filter(Boolean);
+                      
+                      if (artificialRows.length > 0) {
+                        return (
+                          <div className="p-3 bg-white rounded border border-orange-200">
+                            <div className="text-sm mb-2">
+                              <strong>Rows with artificial basic variables:</strong>
+                            </div>
+                            <div className="text-xs space-y-1 mb-3">
+                              {artificialRows.map((row, idx) => (
+                                <div key={idx} className="pl-4">
+                                  • Row {row.index + 1}: <strong className="text-orange-700">{row.varName}</strong>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="text-xs text-indigo-600 font-mono bg-indigo-50 p-2 rounded">
+                              (-w)_new = (-w)_old - ({artificialRows.map((row, idx) => 
+                                `Row_${row.index + 1}`
+                              ).join(' + ')})
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                  
+                  {basicVariables.every((bv) => {
+                    return bv < numVariables + userSlackVars || bv >= totalVars;
+                  }) && (
+                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
+                      <p className="text-xs text-green-700">
+                        ✓ No artificial variables are basic! Simply copy the Initial (-w) row below.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
-              
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr>
-                      {Array.from({ length: numVariables }, (_, i) => (
-                        <th key={i} className="border p-2 bg-gray-100">
-                          x<sub>{i + 1}</sub>
-                        </th>
+
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-sm mb-2"><strong>Initial (-w) row (before elimination):</strong></p>
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-xs" style={{tableLayout: 'fixed'}}>
+                    <colgroup>
+                      <col style={{width: '60px'}} />
+                      {Array.from({ length: numVariables }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
                       ))}
-                      {Array.from({ length: userSlackVars }, (_, i) => (
-                        <th key={i} className="border p-2 bg-gray-100">
-                          <span className="text-gray-500">s<sub>{i + 1}</sub></span>
-                        </th>
+                      {Array.from({ length: userSlackVars }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
                       ))}
-                      <th className="border p-2 bg-gray-100">b</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      {userObjectiveRow.map((value, j) => (
-                        <td key={j} className="border p-2 text-center">
-                          <Input
-                            type="number"
-                            value={value}
-                            onChange={(e) => updateObjectiveCell(j, e.target.value)}
-                            onKeyDown={(e) => handleEnterKeyPress(e, value, (val) => updateObjectiveCell(j, val))}
-                            className="w-20 text-center"
-                            step="0.1"
-                          />
-                        </td>
+                      {Array.from({ length: userArtificialVars }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
                       ))}
-                    </tr>
-                  </tbody>
-                </table>
+                      <col style={{width: '80px'}} />
+                      <col style={{width: '80px'}} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th className="border p-2 bg-gray-100"></th>
+                        {Array.from({ length: numVariables }, (_, i) => (
+                          <th key={i} className="border p-2 bg-gray-100">
+                            x<sub>{i + 1}</sub>
+                          </th>
+                        ))}
+                        {Array.from({ length: userSlackVars }, (_, i) => (
+                          <th key={i} className="border p-2 bg-gray-100">
+                            s<sub>{i + 1}</sub>
+                          </th>
+                        ))}
+                        {Array.from({ length: userArtificialVars }, (_, i) => (
+                          <th key={i} className="border p-2 bg-orange-100">
+                            <span className="text-orange-600">a<sub>{i + 1}</sub></span>
+                          </th>
+                        ))}
+                        <th className="border p-2 bg-gray-100">(-w)</th>
+                        <th className="border p-2 bg-gray-100">b</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="border p-2 bg-gray-50"></td>
+                        {initialWRow.map((value, j) => (
+                          <td key={j} className="border p-2 text-center tabular-nums">
+                            {formatNumber(value)}
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              
-              <Button onClick={handleObjectiveRowSubmit} size="sm">
+
+              <div className="p-3 bg-indigo-50 rounded-lg">
+                <p className="text-sm mb-2"><strong>Current Constraint Rows:</strong></p>
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-xs" style={{tableLayout: 'fixed'}}>
+                    <colgroup>
+                      <col style={{width: '60px'}} />
+                      {Array.from({ length: numVariables }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
+                      ))}
+                      {Array.from({ length: userSlackVars }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
+                      ))}
+                      {Array.from({ length: userArtificialVars }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
+                      ))}
+                      <col style={{width: '80px'}} />
+                      <col style={{width: '80px'}} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th className="border p-2 bg-gray-100">Basic</th>
+                        {Array.from({ length: numVariables }, (_, i) => (
+                          <th key={i} className="border p-2 bg-gray-100">
+                            x<sub>{i + 1}</sub>
+                          </th>
+                        ))}
+                        {Array.from({ length: userSlackVars }, (_, i) => (
+                          <th key={i} className="border p-2 bg-gray-100">
+                            s<sub>{i + 1}</sub>
+                          </th>
+                        ))}
+                        {Array.from({ length: userArtificialVars }, (_, i) => (
+                          <th key={i} className="border p-2 bg-orange-100">
+                            <span className="text-orange-600">a<sub>{i + 1}</sub></span>
+                          </th>
+                        ))}
+                        <th className="border p-2 bg-gray-100">(-w)</th>
+                        <th className="border p-2 bg-gray-100">b</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableau.slice(0, -2).map((row, i) => {
+                        const bv = basicVariables[i];
+                        const isValidBV = bv !== undefined && bv !== null && !isNaN(bv);
+                        return (
+                          <tr key={i}>
+                            <td className="border p-2 text-center bg-gray-50">
+                              {isValidBV && bv < numVariables ? (
+                                <span>x<sub>{bv + 1}</sub></span>
+                              ) : isValidBV && bv < numVariables + userSlackVars ? (
+                                <span>s<sub>{bv - numVariables + 1}</sub></span>
+                              ) : isValidBV && bv < totalVars ? (
+                                <span className="text-orange-600">a<sub>{bv - numVariables - userSlackVars + 1}</sub></span>
+                              ) : (
+                                <span>-</span>
+                              )}
+                            </td>
+                            {row.map((value, j) => (
+                              <td key={j} className="border p-2 text-center tabular-nums">
+                                {formatNumber(value)}
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="p-3 bg-orange-50 rounded-lg">
+                <p className="text-sm mb-2"><strong>Enter the canonical (-w) row (after eliminating artificial variables):</strong></p>
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-xs" style={{tableLayout: 'fixed'}}>
+                    <colgroup>
+                      <col style={{width: '60px'}} />
+                      {Array.from({ length: numVariables }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
+                      ))}
+                      {Array.from({ length: userSlackVars }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
+                      ))}
+                      {Array.from({ length: userArtificialVars }, () => (
+                        <col key={Math.random()} style={{width: '80px'}} />
+                      ))}
+                      <col style={{width: '80px'}} />
+                      <col style={{width: '80px'}} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th className="border p-2 bg-gray-100"></th>
+                        {Array.from({ length: numVariables }, (_, i) => (
+                          <th key={i} className="border p-2 bg-gray-100">
+                            x<sub>{i + 1}</sub>
+                          </th>
+                        ))}
+                        {Array.from({ length: userSlackVars }, (_, i) => (
+                          <th key={i} className="border p-2 bg-gray-100">
+                            s<sub>{i + 1}</sub>
+                          </th>
+                        ))}
+                        {Array.from({ length: userArtificialVars }, (_, i) => (
+                          <th key={i} className="border p-2 bg-orange-100">
+                            <span className="text-orange-600">a<sub>{i + 1}</sub></span>
+                          </th>
+                        ))}
+                        <th className="border p-2 bg-gray-100">(-w)</th>
+                        <th className="border p-2 bg-gray-100">b</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="border p-2 bg-gray-50"></td>
+                        {userCanonicalWRow.map((value, j) => (
+                          <td key={j} className="border p-2 text-center">
+                            <Input
+                              type="number"
+                              value={value}
+                              onChange={(e) => updateCanonicalWCell(j, e.target.value)}
+                              onKeyDown={(e) => handleEnterKeyPress(e, value, (val) => updateCanonicalWCell(j, val))}
+                              className="w-full text-center"
+                              step="0.1"
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <Button onClick={handleCanonicalWRowSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Check Answer
               </Button>
@@ -2589,18 +3644,19 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Calculator className="w-6 h-6 text-purple-600" />
-              Convert Z-row to Canonical Form
+              Convert (-f) Row to Canonical Form
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               <div className="p-4 bg-purple-50 rounded-lg space-y-3">
                 <p className="text-sm">
-                  <strong>Goal:</strong> Eliminate all basic variables from the Z-row so they have 0 coefficients.
+                  <strong>Goal:</strong> Eliminate all basic variables from the (-f) row so they have 0 coefficients.
                 </p>
                 <p className="text-sm text-gray-700">
                   <strong>Current Basic Variables:</strong> {' '}
-                  {basicVariables.map((bv, i) => {
+                  {basicVariables.slice(0, tableau.length - 1).map((bv, i) => {
+                    if (bv === undefined || bv === null || isNaN(bv)) return null;
                     const varName = bv < numVariables 
                       ? `x${bv + 1}` 
                       : bv < numVariables + userSlackVars 
@@ -2611,37 +3667,58 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                         Row {i + 1}: {varName}
                       </span>
                     );
-                  })}
+                  }).filter(Boolean)}
                 </p>
                 
                 <div className="pt-2 border-t border-purple-200">
-                  <p className="text-sm mb-2"><strong>📝 Step-by-Step Process:</strong></p>
-                  <ol className="text-xs text-gray-700 space-y-2 ml-4 list-decimal">
-                    {basicVariables.map((bv, i) => {
+                  <p className="text-sm mb-2"><strong>📝 How to Convert to Canonical Form:</strong></p>
+                  <div className="text-xs text-gray-700 space-y-2 p-3 bg-white rounded">
+                    <p><strong>Method:</strong> Use row operations to eliminate basic variables from the (-f) row.</p>
+                    <p className="text-purple-700">
+                      <strong>Formula:</strong> (-f)_new = (-f)_old - (coefficient) × (constraint row)
+                    </p>
+                    <p>Perform this operation for each basic variable that has a non-zero coefficient in the (-f) row.</p>
+                  </div>
+                  
+                  <div className="mt-3 space-y-2">
+                    <p className="text-sm"><strong>Required Eliminations:</strong></p>
+                    {basicVariables.slice(0, tableau.length - 1).map((bv, i) => {
+                      if (bv === undefined || bv === null || isNaN(bv)) return null;
                       const coeff = initialZRow[bv];
                       if (Math.abs(coeff) < 1e-10) return null;
-                      const varName = bv < numVariables ? `x${bv + 1}` : `s${bv - numVariables + 1}`;
+                      const varName = bv < numVariables 
+                        ? `x${bv + 1}` 
+                        : bv < numVariables + userSlackVars 
+                        ? `s${bv - numVariables + 1}` 
+                        : `a${bv - numVariables - userSlackVars + 1}`;
                       return (
-                        <li key={i}>
-                          Eliminate <strong>{varName}</strong> from Z-row. Current coefficient: {formatNumber(coeff)}
-                          <br />
-                          <span className="text-indigo-600 font-mono text-xs">
+                        <div key={i} className="p-2 bg-white rounded border border-purple-200">
+                          <div className="text-sm mb-1">
+                            <strong>Step {i + 1}:</strong> Eliminate <strong className="text-purple-700">{varName}</strong> (coefficient: {formatNumber(coeff)})
+                          </div>
+                          <div className="text-xs text-indigo-600 font-mono pl-4">
                             Z_new = Z_old - ({formatNumber(coeff)}) × Row_{i + 1}
-                          </span>
-                        </li>
+                          </div>
+                        </div>
                       );
                     }).filter(Boolean)}
-                  </ol>
-                  {basicVariables.every((bv) => Math.abs(initialZRow[bv]) < 1e-10) && (
-                    <p className="text-xs text-green-700 mt-2">
-                      ✓ All basic variables already have 0 coefficients! Z-row is already in canonical form.
-                    </p>
+                  </div>
+                  
+                  {basicVariables.slice(0, tableau.length - 1).every((bv) => {
+                    if (bv === undefined || bv === null || isNaN(bv)) return true;
+                    return Math.abs(initialZRow[bv]) < 1e-10;
+                  }) && (
+                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
+                      <p className="text-xs text-green-700">
+                        ✓ All basic variables already have 0 coefficients! Simply copy the Initial (-f) row below.
+                      </p>
+                    </div>
                   )}
                 </div>
               </div>
 
               <div className="p-3 bg-gray-50 rounded-lg">
-                <p className="text-sm mb-2"><strong>Initial Z-row (before elimination):</strong></p>
+                <p className="text-sm mb-2"><strong>Initial (-f) row (before elimination):</strong></p>
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse">
                     <thead>
@@ -2693,29 +3770,65 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                       </tr>
                     </thead>
                     <tbody>
-                      {tableau.map((row, i) => (
-                        <tr key={i}>
-                          <td className="border p-2 text-center bg-gray-50">
-                            {basicVariables[i] < numVariables ? (
-                              <span>x<sub>{basicVariables[i] + 1}</sub></span>
-                            ) : (
-                              <span>s<sub>{basicVariables[i] - numVariables + 1}</sub></span>
-                            )}
-                          </td>
-                          {row.map((value, j) => (
-                            <td key={j} className="border p-2 text-center tabular-nums">
-                              {formatNumber(value)}
+                      {tableau.slice(0, -1).map((row, i) => {
+                        const bv = basicVariables[i];
+                        const isValidBV = bv !== undefined && bv !== null && !isNaN(bv);
+                        return (
+                          <tr key={i}>
+                            <td className="border p-2 text-center bg-gray-50">
+                              {isValidBV && bv < numVariables ? (
+                                <span>x<sub>{bv + 1}</sub></span>
+                              ) : isValidBV && bv < numVariables + userSlackVars ? (
+                                <span>s<sub>{bv - numVariables + 1}</sub></span>
+                              ) : (
+                                <span>-</span>
+                              )}
                             </td>
-                          ))}
-                        </tr>
-                      ))}
+                            {row.map((value, j) => (
+                              <td key={j} className="border p-2 text-center tabular-nums">
+                                {formatNumber(value)}
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
               </div>
 
+              <div className="p-3 bg-blue-50 rounded-lg border border-blue-300">
+                <p className="text-sm mb-2"><strong>💡 Example Calculation:</strong></p>
+                <div className="text-xs text-gray-700 space-y-1">
+                  {basicVariables.slice(0, tableau.length - 1).map((bv, i) => {
+                    if (bv === undefined || bv === null || isNaN(bv) || i >= tableau.length - 1) return null;
+                    const coeff = initialZRow[bv];
+                    if (Math.abs(coeff) < 1e-10) return null;
+                    const varName = bv < numVariables 
+                      ? `x${bv + 1}` 
+                      : bv < numVariables + userSlackVars 
+                      ? `s${bv - numVariables + 1}` 
+                      : `a${bv - numVariables - userSlackVars + 1}`;
+                    
+                    // Show example for first column only
+                    if (i === 0) {
+                      const firstColZValue = initialZRow[0];
+                      const firstColRowValue = tableau[i][0];
+                      const result = firstColZValue - coeff * firstColRowValue;
+                      return (
+                        <div key={i} className="p-2 bg-white rounded font-mono">
+                          For column x<sub>1</sub>: {formatNumber(firstColZValue)} - ({formatNumber(coeff)}) × {formatNumber(firstColRowValue)} = {formatNumber(result)}
+                        </div>
+                      );
+                    }
+                    return null;
+                  }).filter(Boolean)}
+                  <p className="text-gray-600 italic pt-1">Apply the same formula to all columns...</p>
+                </div>
+              </div>
+
               <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-300">
-                <p className="text-sm mb-3"><strong>Enter the Z-row after applying all eliminations:</strong></p>
+                <p className="text-sm mb-3"><strong>Enter the (-f) row after applying all eliminations:</strong></p>
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse">
                     <thead>
@@ -2753,7 +3866,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 </div>
               </div>
               
-              <Button onClick={handleCanonicalFormSubmit} size="sm">
+              <Button onClick={handleCanonicalFormSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Check Canonical Form
               </Button>
@@ -2782,32 +3895,48 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                     </span>
                   ))}
                 </p>
-                <p className="text-sm text-gray-600">
-                  In standard form, we write: Z - ({' '}
-                  {problem.isMaximization 
-                    ? problem.objectiveCoefficients.map((c, i) => (
-                        <span key={i}>
-                          {i > 0 && (c >= 0 ? ' + ' : ' ')}
-                          {c}x<sub>{i + 1}</sub>
-                        </span>
-                      ))
-                    : problem.objectiveCoefficients.map((c, i) => (
-                        <span key={i}>
-                          {i > 0 && (-c >= 0 ? ' + ' : ' ')}
-                          {-c}x<sub>{i + 1}</sub>
-                        </span>
-                      ))
-                  }) = 0
-                </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  This means: {' '}
-                  {(problem.isMaximization ? problem.objectiveCoefficients : problem.objectiveCoefficients.map(c => -c)).map((c, i) => (
-                    <span key={i}>
-                      {i > 0 && ' '}{-c >= 0 && i > 0 ? '+ ' : ''}{-c < 0 ? '- ' : ''}{Math.abs(-c)}x<sub>{i + 1}</sub>
-                    </span>
-                  ))} {' '} (slack variables = 0)
-                </p>
               </div>
+
+              {/* Request Explanation Button */}
+              <div>
+                <Button
+                  onClick={() => setShowExplanation(!showExplanation)}
+                  variant="outline"
+                  size="sm"
+                >
+                  <HelpCircle className="w-4 h-4 mr-2" />
+                  {showExplanation ? 'Hide Explanation' : 'Request Explanation'}
+                </Button>
+              </div>
+
+              {/* Explanation Section */}
+              {showExplanation && (
+                <Alert className="bg-blue-50 border-blue-200">
+                  <HelpCircle className="h-4 w-4 text-blue-600" />
+                  <AlertDescription className="text-blue-900">
+                    <p className="text-sm mb-2">
+                      <strong>Converting to Standard Form:</strong>
+                    </p>
+                    <p className="text-sm mb-2">
+                      The Simplex method requires the objective function to be written in standard form. 
+                      {problem.isMaximization ? (
+                        <span> For maximization, we write: Z - ({problem.objectiveCoefficients.map((c, i) => 
+                          `${i > 0 && c >= 0 ? '+ ' : ''}${c}x${i + 1}`
+                        ).join(' ')}) = 0</span>
+                      ) : (
+                        <span> For minimization, we first convert to maximization by negating coefficients, then write: Z - ({problem.objectiveCoefficients.map((c, i) => 
+                          `${i > 0 && -c >= 0 ? '+ ' : ''}${-c}x${i + 1}`
+                        ).join(' ')}) = 0</span>
+                      )}
+                    </p>
+                    <p className="text-sm">
+                      Rearranging gives us the objective row coefficients: <strong>negate each coefficient</strong> from the original objective function
+                      {!problem.isMaximization && <span> (after converting to maximization)</span>}. 
+                      All slack/surplus variables have coefficient <strong>0</strong> in the objective function.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
               
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
@@ -2823,7 +3952,6 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                           <span className="text-gray-500">s<sub>{i + 1}</sub></span>
                         </th>
                       ))}
-                      <th className="border p-2 bg-gray-100">b</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2845,7 +3973,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 </table>
               </div>
               
-              <Button onClick={handleObjectiveRowSubmit} size="sm">
+              <Button onClick={handleObjectiveRowSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Check Answer
               </Button>
@@ -2854,8 +3982,8 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
         </Card>
       )}
 
-      {step !== 'setup-slack' && step !== 'setup-artificial' && step !== 'setup-constraints' && 
-       step !== 'setup-phase1-objective' && step !== 'setup-phase2-objective' && step !== 'setup-objective' && 
+      {step !== 'setup-slack' && step !== 'check-feasibility' && step !== 'setup-artificial' && step !== 'modify-constraints-artificial' && step !== 'setup-constraints' && 
+       step !== 'setup-phase1-objective' && step !== 'setup-objective' && step !== 'eliminate-artificial-w-row' && 
        step !== 'convert-to-canonical' && (
         <Card>
           <CardHeader>
@@ -2933,7 +4061,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                   </tr>
                 </thead>
                 <tbody>
-                  {tableau.slice(0, needsPhase1 && currentPhase === 1 ? tableau.length - 2 : numConstraints).map((row, i) => (
+                  {tableau.slice(0, needsPhase1 && currentPhase === 1 ? tableau.length - 2 : tableau.length - 1).map((row, i) => (
                     <tr key={i}>
                       <td
                         className={`border p-2 text-center cursor-pointer transition-colors ${
@@ -2947,16 +4075,20 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                         }`}
                         onClick={() => handleRowClick(i)}
                       >
-                        {basicVariables[i] < numVariables ? (
-                          <span>x<sub>{basicVariables[i] + 1}</sub></span>
-                        ) : basicVariables[i] < numVariables + userSlackVars ? (
-                          <span className="text-gray-500">
-                            s<sub>{basicVariables[i] - numVariables + 1}</sub>
-                          </span>
+                        {basicVariables[i] !== undefined && basicVariables[i] !== null && !isNaN(basicVariables[i]) ? (
+                          basicVariables[i] < numVariables ? (
+                            <span>x<sub>{basicVariables[i] + 1}</sub></span>
+                          ) : basicVariables[i] < numVariables + userSlackVars ? (
+                            <span className="text-gray-500">
+                              s<sub>{basicVariables[i] - numVariables + 1}</sub>
+                            </span>
+                          ) : (
+                            <span className="text-orange-600">
+                              a<sub>{basicVariables[i] - numVariables - userSlackVars + 1}</sub>
+                            </span>
+                          )
                         ) : (
-                          <span className="text-orange-600">
-                            a<sub>{basicVariables[i] - numVariables - userSlackVars + 1}</sub>
-                          </span>
+                          <span className="text-red-600 text-xs">ERROR: No basic variable for row {i + 1}</span>
                         )}
                       </td>
                       {row.map((value, j) => {
@@ -3191,7 +4323,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 <HelpCircle className="h-4 w-4 text-blue-600" />
                 <AlertDescription className="text-blue-900">
                   <p className="text-sm">
-                    The most negative value in the Z row indicates that a unit change in that variable would have the largest impact on improving the objective function. While we still do not know how much we can increase it without violating a constraint, and hence there is no guarantee that adding a different variable might be a better choice (allow a larger improvement in the objective function), it is the one we'll guess should be added to the basis in our efforts to improve the objective function.
+                    The most negative value in the (-f) row indicates that a unit change in that variable would have the largest impact on improving the objective function. While we still do not know how much we can increase it without violating a constraint, and hence there is no guarantee that adding a different variable might be a better choice (allow a larger improvement in the objective function), it is the one we'll guess should be added to the basis in our efforts to improve the objective function.
                   </p>
                 </AlertDescription>
               </Alert>
@@ -3204,13 +4336,100 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 <AlertDescription className="text-indigo-900">
                   <strong>📐 Canonical Form Achieved!</strong>
                   <p className="text-sm mt-1">
-                    Notice that the Z-row now has 0 values for all basic variables (check the columns corresponding to variables in the "Basic" column). 
-                    This is called <strong>canonical form</strong> and is essential for the Simplex method to work correctly. 
-                    The non-zero values you see were eliminated using row operations: Z_row -= (coefficient) × constraint_row.
+                    Notice that the (-f) row now has 0 values for all basic variables (check the columns corresponding to variables in the "Basic" column). 
+                    This is called <strong>canonical form</strong> and is essential for the Simplex method to work correctly.
                   </p>
                 </AlertDescription>
               </Alert>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Optimal Solution Summary - shown after the tableau when complete */}
+      {step === 'complete' && (
+        <Card className="bg-gradient-to-r from-green-50 to-emerald-50 border-green-200">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Trophy className="w-6 h-6 text-green-600" />
+              Solution Summary
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Decision Variables */}
+                <div className="space-y-3">
+                  <h4 className="font-medium text-gray-700">Decision Variables</h4>
+                  <div className="space-y-2">
+                    {getSolution().solution.map((value, index) => {
+                      // Check if this variable is basic
+                      const varIndex = index;
+                      const isBasic = basicVariables.includes(varIndex);
+                      
+                      return (
+                        <div 
+                          key={index} 
+                          className={`flex justify-between items-center py-2 px-4 rounded-lg border ${
+                            isBasic ? 'bg-white border-green-200' : 'bg-gray-50 border-gray-200'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="font-medium">
+                              x<sub>{index + 1}</sub>
+                            </span>
+                            {isBasic && (
+                              <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">
+                                Basic
+                              </span>
+                            )}
+                          </span>
+                          <span className="font-mono">{formatNumber(value)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Optimal Value and Summary */}
+                <div className="space-y-3">
+                  <h4 className="font-medium text-gray-700">Optimal Objective Value</h4>
+                  <div className="bg-white rounded-lg border border-green-200 p-6 text-center">
+                    <div className="text-sm text-gray-600 mb-2">
+                      {problem.isMaximization ? 'Maximum' : 'Minimum'}
+                    </div>
+                    <div className="text-3xl font-medium text-green-700 mb-1">
+                      Z = {formatNumber(getSolution().optimalValue)}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-3 space-y-1">
+                      {needsPhase1 && phase1Iterations > 0 ? (
+                        <>
+                          <p>Phase 1: {phase1Iterations} iteration(s)</p>
+                          <p>Phase 2: {iteration} iteration(s)</p>
+                          <p className="font-medium">Total: {phase1Iterations + iteration} iteration(s)</p>
+                        </>
+                      ) : (
+                        <p>Found in {iteration} iteration(s)</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Basic vs Non-Basic Summary */}
+                  <div className="bg-white rounded-lg border border-gray-200 p-4">
+                    <div className="text-sm space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Basic variables:</span>
+                        <span className="font-medium">{basicVariables.length}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Non-basic variables:</span>
+                        <span className="font-medium">{numVariables - basicVariables.filter(bv => bv < numVariables).length}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -3355,7 +4574,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 })}
               </div>
               
-              <Button onClick={handleRatioSubmit} size="sm">
+              <Button onClick={handleRatioSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Check Values
               </Button>
@@ -3442,7 +4661,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                 <p className="mt-2"><strong>Hint:</strong> Look at the value in Row {selectedLeaving + 1}, Column {selectedEntering + 1} (the pivot position). This is the pivot element.</p>
               </div>
               
-              <Button onClick={handlePivotRowSubmit} size="sm">
+              <Button onClick={handlePivotRowSubmit} size="sm" className={getHighlightClass()}>
                 <ArrowRight className="w-4 h-4 mr-2" />
                 Apply Formula
               </Button>
@@ -3489,8 +4708,11 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                     if (i === tableau.length - 1) rowLabel = '(-w) row';
                     else if (i === tableau.length - 2) rowLabel = '(-f) row';
                     else rowLabel = `Row ${i + 1}`;
+                  } else if (needsPhase1) {
+                    // Phase 2 after Phase 1 - last row is (-f) row
+                    rowLabel = i === tableau.length - 1 ? '(-f) row' : `Row ${i + 1}`;
                   } else {
-                    rowLabel = i === tableau.length - 1 ? 'Z row' : `Row ${i + 1}`;
+                    rowLabel = i === tableau.length - 1 ? '(-f) row' : `Row ${i + 1}`;
                   }
                   
                   return (
@@ -3547,7 +4769,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                   {showHint ? 'Hide Hints' : 'Show Hints'}
                 </Button>
                 
-                <Button onClick={handleOtherRowsSubmit} size="sm">
+                <Button onClick={handleOtherRowsSubmit} size="sm" className={getHighlightClass()}>
                   <ArrowRight className="w-4 h-4 mr-2" />
                   Apply Formulas
                 </Button>
@@ -3588,65 +4810,16 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
                   <strong>Optimality Condition:</strong>
                 </p>
                 <p className="text-sm text-gray-700">
-                  A solution is <strong>optimal</strong> when ALL values in the {needsPhase1 && currentPhase === 1 ? 'w' : 'Z'} row (excluding b) are <strong>non-negative</strong> (≥ 0).
+                  A solution is <strong>optimal</strong> when ALL values in the {needsPhase1 && currentPhase === 1 ? '(-w)' : '(-f)'} row (excluding b) are <strong>non-negative</strong> (≥ 0).
                 </p>
                 <p className="text-sm text-gray-700">
-                  If any value in the {needsPhase1 && currentPhase === 1 ? 'w' : 'Z'} row is negative, we can still improve the solution by performing another iteration.
+                  If any value in the {needsPhase1 && currentPhase === 1 ? '(-w)' : '(-f)'} row is negative, we can still improve the solution by performing another iteration.
                 </p>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr>
-                      <th className="border p-2 bg-gray-100"></th>
-                      {Array.from({ length: numVariables }, (_, i) => (
-                        <th key={i} className="border p-2 bg-gray-100">
-                          x<sub>{i + 1}</sub>
-                        </th>
-                      ))}
-                      {Array.from({ length: numCols - numVariables }, (_, i) => (
-                        <th key={i} className="border p-2 bg-gray-100">
-                          <span className="text-gray-500">s<sub>{i + 1}</sub></span>
-                        </th>
-                      ))}
-                      <th className="border p-2 bg-gray-100">b</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableau.map((row, i) => {
-                      const isZRow = i === tableau.length - 1;
-                      return (
-                        <tr key={i} className={isZRow ? 'bg-yellow-50' : ''}>
-                          <td className="border p-2 text-center bg-gray-50">
-                            {isZRow ? (needsPhase1 && currentPhase === 1 ? 'w' : 'Z') : `Row ${i + 1}`}
-                          </td>
-                          {row.map((value, j) => {
-                            const isRHS = j === row.length - 1;
-                            const isNegative = value < -1e-10;
-                            return (
-                              <td 
-                                key={j} 
-                                className={`border p-2 text-center tabular-nums ${
-                                  isZRow && !isRHS && isNegative ? 'bg-red-100 font-bold' : ''
-                                } ${
-                                  isZRow && !isRHS && !isNegative ? 'bg-green-100' : ''
-                                }`}
-                              >
-                                {formatNumber(value)}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
               </div>
 
               <div className="p-4 bg-gray-50 rounded-lg">
                 <p className="text-sm mb-3">
-                  <strong>Examine the Z row above. Is the current solution optimal?</strong>
+                  <strong>Examine the {needsPhase1 && currentPhase === 1 ? '(-w)' : '(-f)'} row in the Simplex Tableau above. Is the current solution optimal?</strong>
                 </p>
                 <div className="flex gap-3">
                   <Button 
@@ -3669,17 +4842,7 @@ export function InteractiveSimplex({ problem, onEditProblem }: InteractiveSimple
               </div>
 
               <div className="text-xs text-gray-500 space-y-1">
-                <p><strong>Legend:</strong></p>
-                <div className="flex flex-wrap gap-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 bg-red-100 border"></div>
-                    <span>Negative value (can improve)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 bg-green-100 border"></div>
-                    <span>Non-negative value</span>
-                  </div>
-                </div>
+                <p><strong>Hint:</strong> Look for any negative values in the {needsPhase1 && currentPhase === 1 ? '(-w)' : '(-f)'} row (excluding the b column). If there are no negative values, the solution is optimal.</p>
               </div>
             </div>
           </CardContent>

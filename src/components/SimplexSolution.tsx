@@ -140,7 +140,7 @@ export function SimplexSolution({ result, problem }: SimplexSolutionProps) {
       
       result.phase1Tableaus.forEach((tableau, iteration) => {
         const basicVars = result.phase1BasicVariables![iteration];
-        const numConstraints = tableau.length - 1;
+        const numConstraints = basicVars.length; // Use basicVars length for constraint count
         
         if (yPos > pageHeight - 80) {
           doc.addPage();
@@ -151,7 +151,7 @@ export function SimplexSolution({ result, problem }: SimplexSolutionProps) {
         doc.text(`Iteration ${iteration}`, 20, yPos);
         yPos += lineHeight;
         
-        // Generate proper headers for Phase 1 (includes slack and artificial vars)
+        // Generate proper headers for Phase 1 (includes slack, artificial, (-f) and (-w) columns)
         const slackHeaders = Array.from({ length: slackCount }, (_, i) => `s${i+1}`);
         const artificialHeaders = Array.from({ length: artificialCount }, (_, i) => `a${i+1}`);
         
@@ -160,27 +160,30 @@ export function SimplexSolution({ result, problem }: SimplexSolutionProps) {
           ...Array.from({ length: problem.numVariables }, (_, i) => `x${i+1}`),
           ...slackHeaders,
           ...artificialHeaders,
-          'b'
+          '(-f)',
+          '(-w)',
+          'RHS'
         ];
         
-        const body = [
-          ...tableau.slice(0, numConstraints).map((row, i) => {
-            let basicVar;
-            if (basicVars[i] < problem.numVariables) {
-              basicVar = `x${basicVars[i] + 1}`;
-            } else if (basicVars[i] < problem.numVariables + slackCount) {
-              basicVar = `s${basicVars[i] - problem.numVariables + 1}`;
-            } else {
-              basicVar = `a${basicVars[i] - problem.numVariables - slackCount + 1}`;
-            }
-            return [basicVar, ...row.map(v => formatNumber(v))];
-          }),
-          ['w', ...tableau[numConstraints].map(v => formatNumber(v))]
-        ];
+        const rows = tableau.slice(0, numConstraints).map((row, i) => {
+          let basicVar;
+          if (basicVars[i] < problem.numVariables) {
+            basicVar = `x${basicVars[i] + 1}`;
+          } else if (basicVars[i] < problem.numVariables + slackCount) {
+            basicVar = `s${basicVars[i] - problem.numVariables + 1}`;
+          } else {
+            basicVar = `a${basicVars[i] - problem.numVariables - slackCount + 1}`;
+          }
+          return [basicVar, ...row.map(v => parseFloat(formatNumber(v)))];
+        });
+        
+        // Phase 1 has two objective rows: (-f) and (-w)
+        const fRow = ['(-f)', ...tableau[numConstraints].map(v => parseFloat(formatNumber(v)))];
+        const wRow = ['(-w)', ...tableau[numConstraints + 1].map(v => parseFloat(formatNumber(v)))];
         
         autoTable(doc, {
           head: [headers],
-          body: body,
+          body: [...rows, fRow, wRow],
           startY: yPos,
           theme: 'grid',
           styles: { fontSize: 7, cellPadding: 1.5 },
@@ -302,9 +305,9 @@ export function SimplexSolution({ result, problem }: SimplexSolutionProps) {
       
       result.phase1Tableaus.forEach((tableau, iteration) => {
         const basicVars = result.phase1BasicVariables![iteration];
-        const numConstraints = tableau.length - 1;
+        const numConstraints = basicVars.length; // Use basicVars length for constraint count
         
-        // Generate proper headers for Phase 1 (includes slack and artificial vars)
+        // Generate proper headers for Phase 1 (includes slack, artificial, (-f) and (-w) columns)
         const slackHeaders = Array.from({ length: slackCount }, (_, i) => `s${i+1}`);
         const artificialHeaders = Array.from({ length: artificialCount }, (_, i) => `a${i+1}`);
         
@@ -314,7 +317,8 @@ export function SimplexSolution({ result, problem }: SimplexSolutionProps) {
           ...slackHeaders,
           ...artificialHeaders,
           '(-f)',
-          'b'
+          '(-w)',
+          'RHS'
         ];
         
         const rows = tableau.slice(0, numConstraints).map((row, i) => {
@@ -326,21 +330,18 @@ export function SimplexSolution({ result, problem }: SimplexSolutionProps) {
           } else {
             basicVar = `a${basicVars[i] - problem.numVariables - slackCount + 1}`;
           }
-          const rowData = row.map(v => parseFloat(formatNumber(v)));
-          // Insert (-f) column with value 0 before b
-          rowData.splice(rowData.length - 1, 0, 0);
-          return [basicVar, ...rowData];
+          return [basicVar, ...row.map(v => parseFloat(formatNumber(v)))];
         });
         
-        const wRowData = tableau[numConstraints].map(v => parseFloat(formatNumber(v)));
-        // Insert (-f) column with value 1 before b
-        wRowData.splice(wRowData.length - 1, 0, 1);
-        const wRow = ['(-f)', ...wRowData];
+        // Phase 1 has two objective rows: (-f) and (-w)
+        const fRow = ['(-f)', ...tableau[numConstraints].map(v => parseFloat(formatNumber(v)))];
+        const wRow = ['(-w)', ...tableau[numConstraints + 1].map(v => parseFloat(formatNumber(v)))];
         
         const tableauData = [
           [`Phase 1 - Iteration ${iteration}`],
           headers,
           ...rows,
+          fRow,
           wRow
         ];
         
@@ -608,7 +609,7 @@ function TableauDisplay({
   steps,
 }: TableauDisplayProps) {
   // For Phase 1: tableau has constraint rows, (-f) row, (-w) row
-  // For Phase 2: tableau has constraint rows, Z row
+  // For Phase 2: tableau has constraint rows, (-f) row
   const numConstraints = isPhase1 ? tableau.length - 2 : tableau.length - 1;
   const numVars = tableau[0].length - 1;
   
@@ -678,7 +679,7 @@ function TableauDisplay({
           <AlertDescription className="text-sm text-gray-700">
             <strong>Initial Tableau:</strong> The starting point with all {isPhase1 ? 'artificial' : 'slack'} variables in the basis.
             {isPhase1 && ' Phase 1 objective is to minimize the sum of artificial variables (w).'}
-            {!isPhase1 && ' Look for negative values in the Z-row to determine if optimization is needed.'}
+            {!isPhase1 && ' Look for negative values in the (-f) row to determine if optimization is needed.'}
           </AlertDescription>
         </Alert>
       )}
@@ -688,7 +689,7 @@ function TableauDisplay({
         <Alert className="mb-4 bg-green-50 border-green-200">
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertDescription className="text-sm text-green-800">
-            <strong>Optimal Solution Reached:</strong> No negative coefficients remain in the {isPhase1 ? 'w-row' : 'Z-row'}, indicating optimality.
+            <strong>Optimal Solution Reached:</strong> No negative coefficients remain in the {isPhase1 ? 'w-row' : '(-f) row'}, indicating optimality.
             {isPhase1 && ' All artificial variables have been eliminated from the basis.'}
           </AlertDescription>
         </Alert>
